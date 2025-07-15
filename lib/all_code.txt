@@ -1,0 +1,1472 @@
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\main.dart ---
+
+// lib/main.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/core/router/app_router.dart';
+import 'package:load_balance/data/datasources/remote_datasource.dart';
+import 'package:load_balance/data/datasources/remote_datasource_impl.dart';
+import 'package:load_balance/data/repositories/device_repository_impl.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/usecases/check_credentials.dart';
+import 'package:load_balance/presentation/bloc/connection/connection_bloc.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiRepositoryProvider(
+      providers: [
+        // RepositoryProvider for the original repository structure
+        RepositoryProvider<DeviceRepository>(
+          create: (context) => DeviceRepositoryImpl(
+            // The datasource is now also provided separately for the new BLoC
+            remoteDataSource: RemoteDataSourceImpl(),
+          ),
+        ),
+        // Provide the datasource implementation directly for the LoadBalancingBloc
+        RepositoryProvider<RemoteDataSource>(
+          create: (context) => RemoteDataSourceImpl(),
+        ),
+      ],
+      child: MultiBlocProvider(
+        providers: [
+          BlocProvider(
+            create: (context) => ConnectionBloc(
+              checkCredentials: CheckCredentials(
+                context.read<DeviceRepository>(),
+              ),
+            ),
+          ),
+          BlocProvider(
+            create: (context) => LoadBalancingBloc(
+              // The BLoC now directly depends on the datasource to manage the connection
+              remoteDataSource: context.read<RemoteDataSource>(),
+            ),
+          ),
+        ],
+        child: MaterialApp.router(
+          title: 'Cisco Load Balancer',
+          theme: ThemeData(
+            primarySwatch: Colors.blue,
+            useMaterial3: true,
+            brightness: Brightness.dark,
+            cardTheme: CardThemeData(
+              elevation: 2,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12.0),
+              ),
+            ),
+            inputDecorationTheme: const InputDecorationTheme(
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.all(Radius.circular(12.0)),
+              ),
+            ),
+            segmentedButtonTheme: SegmentedButtonThemeData(
+              style: ButtonStyle(
+                shape: WidgetStateProperty.all(
+                  RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12.0),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          routerConfig: AppRouter.router,
+        ),
+      ),
+    );
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\core\error\failure.dart ---
+
+// core/error/failure.dart
+import 'package:equatable/equatable.dart';
+
+abstract class Failure extends Equatable {
+  final String message;
+  const Failure(this.message);
+
+  @override
+  List<Object> get props => [message];
+}
+
+// Failure specific to server/connection errors
+class ServerFailure extends Failure {
+  const ServerFailure(super.message);
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\core\router\app_router.dart ---
+
+// core/router/app_router.dart
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/presentation/screens/load_balancing/load_balancing_screen.dart';
+import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+
+class AppRouter {
+  static final GoRouter router = GoRouter(
+    initialLocation: '/',
+    routes: [
+      GoRoute(
+        path: '/',
+        name: 'connection',
+        builder: (BuildContext context, GoRouterState state) {
+          return const ConnectionScreen();
+        },
+      ),
+      GoRoute(
+        path: '/config',
+        name: 'config',
+        builder: (BuildContext context, GoRouterState state) {
+          // Receive the credentials object from the previous screen
+          final credentials = state.extra as DeviceCredentials;
+          return LoadBalancingScreen(credentials: credentials);
+        },
+      ),
+    ],
+  );
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\core\usecase\usecase.dart ---
+
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource.dart ---
+
+// data/datasources/remote_datasource.dart
+import 'package:dartssh2/dartssh2.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+
+// The interface now expects an active SSHClient for SSH operations.
+abstract class RemoteDataSource {
+  Future<List<RouterInterface>> fetchInterfaces(SSHClient client);
+  Future<String> pingGateway(SSHClient client, String ipAddress);
+  Future<String> getRoutingTable(SSHClient client);
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource_impl.dart ---
+
+// data/datasources/remote_datasource_impl.dart
+import 'dart:async';
+import 'dart:convert';
+import 'package:dartssh2/dartssh2.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+import 'remote_datasource.dart';
+
+class RemoteDataSourceImpl implements RemoteDataSource {
+  static const _commandTimeout = Duration(seconds: 15);
+
+  @override
+  Future<List<RouterInterface>> fetchInterfaces(SSHClient client) async {
+    final result =
+        await client.run('show ip interface brief').timeout(_commandTimeout);
+    final decodedResult = utf8.decode(result);
+    final lines = decodedResult.split('\n');
+    final interfaces = <RouterInterface>[];
+    final regex = RegExp(
+        r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
+
+    for (final line in lines) {
+      final match = regex.firstMatch(line);
+      if (match != null) {
+        interfaces.add(RouterInterface(
+          name: match.group(1)!,
+          ipAddress: match.group(2)!,
+          status: match.group(3)!,
+        ));
+      }
+    }
+    return interfaces;
+  }
+
+  @override
+  Future<String> pingGateway(SSHClient client, String ipAddress) async {
+    final result =
+        await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
+    final decodedResult = utf8.decode(result);
+    if (decodedResult.contains('!!!')) {
+      return 'Success! Gateway is reachable.';
+    } else if (decodedResult.contains('...')) {
+      return 'Timeout. Gateway is not reachable.';
+    } else {
+      return 'Ping failed. Check IP or connectivity.';
+    }
+  }
+
+  @override
+  Future<String> getRoutingTable(SSHClient client) async {
+    // Run commands sequentially on the SAME client.
+    await client.run('terminal length 0').timeout(_commandTimeout);
+    final result = await client.run('show ip route').timeout(_commandTimeout);
+    return utf8.decode(result);
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\repositories\device_repository_impl.dart ---
+
+// data/repositories/device_repository_impl.dart
+import 'package:dartssh2/dartssh2.dart';
+import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/data/datasources/remote_datasource.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+
+class DeviceRepositoryImpl implements DeviceRepository {
+  final RemoteDataSource remoteDataSource;
+
+  DeviceRepositoryImpl({required this.remoteDataSource});
+
+  @override
+  Future<void> checkCredentials(DeviceCredentials credentials) async {
+    // FIX: This method now handles the connection logic based on the type.
+    if (credentials.type == ConnectionType.ssh) {
+      // For SSH, we create a temporary client just to check credentials, then close it.
+      // The persistent connection will be managed by the LoadBalancingBloc later.
+      SSHClient? client;
+      try {
+        client = SSHClient(
+          await SSHSocket.connect(credentials.ip, 22,
+              timeout: const Duration(seconds: 10)),
+          username: credentials.username,
+          onPasswordRequest: () => credentials.password,
+        );
+        // If the line above doesn't throw an error, credentials are valid.
+      } catch (e) {
+        // Re-throw as a standardized ServerFailure
+        if (e.toString().toLowerCase().contains('auth')) {
+          throw const ServerFailure('Authentication failed.');
+        } else {
+          throw const ServerFailure('Could not connect to host.');
+        }
+      } finally {
+        client?.close();
+      }
+    } else if (credentials.type == ConnectionType.restApi) {
+      // For REST API, we use the datasource method as before.
+      return await remoteDataSource.checkRestApiCredentials(credentials);
+    } else {
+      throw const ServerFailure('Telnet is not implemented.');
+    }
+  }
+
+  // --- The methods below are no longer used in the new architecture ---
+  // The LoadBalancingBloc now communicates directly with the RemoteDataSource.
+  // We keep them here to satisfy the DeviceRepository interface but throw an error
+  // to prevent accidental use.
+
+  @override
+  Future<List<RouterInterface>> getInterfaces(
+      DeviceCredentials credentials) async {
+    throw UnimplementedError(
+        'This method is deprecated. Use LoadBalancingBloc instead.');
+  }
+
+  @override
+  Future<String> pingGateway(
+      {required DeviceCredentials credentials,
+      required String ipAddress}) async {
+    throw UnimplementedError(
+        'This method is deprecated. Use LoadBalancingBloc instead.');
+  }
+
+  @override
+  Future<String> getRoutingTable(DeviceCredentials credentials) async {
+    throw UnimplementedError(
+        'This method is deprecated. Use LoadBalancingBloc instead.');
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\entities\device_credentials.dart ---
+
+// domain/entities/device_credentials.dart
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+
+class DeviceCredentials extends Equatable {
+  final String ip;
+  final String username;
+  final String password;
+  final String? enablePassword;
+  final ConnectionType type;
+
+  const DeviceCredentials({
+    required this.ip,
+    required this.username,
+    required this.password,
+    this.enablePassword,
+    required this.type,
+  });
+
+  @override
+  List<Object?> get props => [ip, username, password, enablePassword, type];
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\entities\router_interface.dart ---
+
+// domain/entities/router_interface.dart
+import 'package:equatable/equatable.dart';
+
+class RouterInterface extends Equatable {
+  final String name;
+  final String ipAddress;
+  final String status;
+
+  const RouterInterface({
+    required this.name,
+    required this.ipAddress,
+    required this.status,
+  });
+
+  @override
+  List<Object?> get props => [name, ipAddress, status];
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\repositories\device_repository.dart ---
+
+// domain/repositories/device_repository.dart
+import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+
+abstract class DeviceRepository {
+  /// Checks credentials by attempting to connect to the device.
+  /// Throws a [ServerFailure] if connection fails.
+  Future<void> checkCredentials(DeviceCredentials credentials);
+
+  /// Fetches the list of interfaces from the device.
+  Future<List<RouterInterface>> getInterfaces(DeviceCredentials credentials);
+
+  /// Pings a gateway IP from the device to check reachability.
+  Future<String> pingGateway({
+    required DeviceCredentials credentials,
+    required String ipAddress,
+  });
+
+  /// Fetches the current IP routing table from the device.
+  Future<String> getRoutingTable(DeviceCredentials credentials);
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\check_credentials.dart ---
+
+
+// domain/usecases/check_credentials.dart
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+
+class CheckCredentials {
+  final DeviceRepository repository;
+
+  CheckCredentials(this.repository);
+
+  Future<void> call(DeviceCredentials credentials) async {
+    return await repository.checkCredentials(credentials);
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\get_interfaces.dart ---
+
+// domain/usecases/get_interfaces.dart
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+
+class GetInterfaces {
+  final DeviceRepository repository;
+
+  GetInterfaces(this.repository);
+
+  Future<List<RouterInterface>> call(DeviceCredentials credentials) async {
+    return await repository.getInterfaces(credentials);
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\get_routing_table.dart ---
+
+// domain/usecases/get_routing_table.dart
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+
+class GetRoutingTable {
+  final DeviceRepository repository;
+
+  GetRoutingTable(this.repository);
+
+  Future<String> call(DeviceCredentials credentials) async {
+    return await repository.getRoutingTable(credentials);
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\ping_gateway.dart ---
+
+// domain/usecases/ping_gateway.dart
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+
+class PingGateway {
+  final DeviceRepository repository;
+
+  PingGateway(this.repository);
+
+  Future<String> call({
+    required DeviceCredentials credentials,
+    required String ipAddress,
+  }) async {
+    return await repository.pingGateway(
+      credentials: credentials,
+      ipAddress: ipAddress,
+    );
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\connection\connection_bloc.dart ---
+
+// presentation/bloc/connection/connection_bloc.dart
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/usecases/check_credentials.dart';
+import 'connection_event.dart';
+import 'connection_state.dart';
+
+class ConnectionBloc extends Bloc<ConnectionEvent, ConnectionState> {
+  final CheckCredentials checkCredentials;
+
+  ConnectionBloc({required this.checkCredentials}) : super(ConnectionInitial()) {
+    on<CheckCredentialsRequested>(_onCheckCredentials);
+  }
+
+  Future<void> _onCheckCredentials(
+    CheckCredentialsRequested event,
+    Emitter<ConnectionState> emit,
+  ) async {
+    emit(ConnectionLoading());
+    try {
+      final credentials = DeviceCredentials(
+        ip: event.ip,
+        username: event.username,
+        password: event.password,
+        enablePassword: event.enablePassword,
+        type: event.type,
+      );
+      await checkCredentials(credentials);
+
+      // Pass the credentials object in the success state
+      emit(ConnectionSuccess(credentials));
+    } on ServerFailure catch (e) {
+      emit(ConnectionFailure(e.message));
+    } catch (e) {
+      emit(ConnectionFailure("An unexpected error occurred: ${e.toString()}"));
+    }
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\connection\connection_event.dart ---
+
+// presentation/bloc/connection/connection_event.dart
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+
+abstract class ConnectionEvent extends Equatable {
+  const ConnectionEvent();
+
+  @override
+  List<Object?> get props => [];
+}
+
+class CheckCredentialsRequested extends ConnectionEvent {
+  final String ip;
+  final String username;
+  final String password;
+  final String? enablePassword;
+  final ConnectionType type;
+
+  const CheckCredentialsRequested({
+    required this.ip,
+    required this.username,
+    required this.password,
+    this.enablePassword,
+    required this.type,
+  });
+
+  @override
+  List<Object?> get props => [ip, username, password, enablePassword, type];
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\connection\connection_state.dart ---
+
+// presentation/bloc/connection/connection_state.dart
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+
+abstract class ConnectionState extends Equatable {
+  const ConnectionState();
+
+  @override
+  List<Object> get props => [];
+}
+
+class ConnectionInitial extends ConnectionState {}
+
+class ConnectionLoading extends ConnectionState {}
+
+// Now holds the credentials on success to pass them to the next screen
+class ConnectionSuccess extends ConnectionState {
+  final DeviceCredentials credentials;
+  const ConnectionSuccess(this.credentials);
+
+  @override
+  List<Object> get props => [credentials];
+}
+
+class ConnectionFailure extends ConnectionState {
+  final String error;
+
+  const ConnectionFailure(this.error);
+
+  @override
+  List<Object> get props => [error];
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\load_balancing\load_balancing_bloc.dart ---
+
+// presentation/bloc/load_balancing/load_balancing_bloc.dart
+import 'dart:async';
+import 'package:dartssh2/dartssh2.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/data/datasources/remote_datasource.dart';
+import 'load_balancing_event.dart';
+import 'load_balancing_state.dart';
+
+class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
+  final RemoteDataSource _remoteDataSource;
+
+  LoadBalancingBloc({required RemoteDataSource remoteDataSource})
+      : _remoteDataSource = remoteDataSource,
+        super(const LoadBalancingState()) {
+    on<ScreenStarted>(_onScreenStarted);
+    on<DisconnectRequested>(_onDisconnectRequested);
+    on<FetchInterfacesRequested>(_onFetchInterfaces);
+    on<FetchRoutingTableRequested>(_onFetchRoutingTable);
+    on<PingGatewayRequested>(_onPingGateway);
+    on<LoadBalancingTypeSelected>(
+        (event, emit) => emit(state.copyWith(type: event.type)));
+  }
+
+  Future<void> _onScreenStarted(
+    ScreenStarted event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    if (state.sshClient != null && !state.sshClient!.isClosed) return;
+
+    emit(state.copyWith(
+        credentials: event.credentials, interfacesStatus: DataStatus.loading));
+
+    try {
+      final socket = await SSHSocket.connect(event.credentials.ip, 22,
+          timeout: const Duration(seconds: 10));
+
+      final client = SSHClient(
+        socket,
+        username: event.credentials.username,
+        onPasswordRequest: () => event.credentials.password,
+      );
+
+      emit(state.copyWith(sshClient: client));
+      add(FetchInterfacesRequested());
+    } catch (e) {
+      emit(state.copyWith(
+          interfacesStatus: DataStatus.failure,
+          error: 'Failed to connect: ${e.toString()}'));
+    }
+  }
+
+  Future<void> _onDisconnectRequested(
+    DisconnectRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    state.sshClient?.close();
+    emit(state.copyWith(clearSshClient: true));
+    debugPrint("SSH Client disconnected.");
+  }
+
+  Future<void> _onFetchInterfaces(
+    FetchInterfacesRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    if (state.sshClient == null) return;
+    emit(state.copyWith(interfacesStatus: DataStatus.loading));
+    try {
+      final interfaces =
+          await _remoteDataSource.fetchInterfaces(state.sshClient!);
+      emit(state.copyWith(
+          interfaces: interfaces, interfacesStatus: DataStatus.success));
+    } catch (e) {
+      emit(state.copyWith(
+          interfacesStatus: DataStatus.failure, error: e.toString()));
+    }
+  }
+
+  Future<void> _onFetchRoutingTable(
+    FetchRoutingTableRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    if (state.sshClient == null) return;
+    emit(state.copyWith(
+        routingTableStatus: DataStatus.loading, clearRoutingTable: true));
+    try {
+      final table = await _remoteDataSource.getRoutingTable(state.sshClient!);
+      emit(state.copyWith(
+          routingTable: table, routingTableStatus: DataStatus.success));
+    } catch (e) {
+      emit(state.copyWith(
+          routingTable: "Error: ${e.toString()}",
+          routingTableStatus: DataStatus.failure));
+    }
+  }
+
+  Future<void> _onPingGateway(
+    PingGatewayRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    if (state.sshClient == null) return;
+    emit(state.copyWith(
+        pingStatus: DataStatus.loading, pingingIp: event.ipAddress));
+    try {
+      final result =
+          await _remoteDataSource.pingGateway(state.sshClient!, event.ipAddress);
+      final newPingResults = Map<String, String>.from(state.pingResults);
+      newPingResults[event.ipAddress] = result;
+      emit(state.copyWith(
+        pingResults: newPingResults,
+        pingStatus: DataStatus.success,
+        pingingIp: '',
+      ));
+    } catch (e) {
+      final newPingResults = Map<String, String>.from(state.pingResults);
+      newPingResults[event.ipAddress] = 'Error: ${e.toString()}';
+      emit(state.copyWith(
+        pingResults: newPingResults,
+        pingStatus: DataStatus.failure,
+        pingingIp: '',
+      ));
+    }
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\load_balancing\load_balancing_event.dart ---
+
+// presentation/bloc/load_balancing/load_balancing_event.dart
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
+
+abstract class LoadBalancingEvent extends Equatable {
+  const LoadBalancingEvent();
+  @override
+  List<Object?> get props => [];
+}
+
+// Event to initialize the screen and establish the persistent SSH connection
+class ScreenStarted extends LoadBalancingEvent {
+  final DeviceCredentials credentials;
+  const ScreenStarted(this.credentials);
+  @override
+  List<Object?> get props => [credentials];
+}
+
+// Event to close the connection when the screen is disposed
+class DisconnectRequested extends LoadBalancingEvent {}
+
+class LoadBalancingTypeSelected extends LoadBalancingEvent {
+  final LoadBalancingType type;
+  const LoadBalancingTypeSelected(this.type);
+  @override
+  List<Object> get props => [type];
+}
+
+class FetchInterfacesRequested extends LoadBalancingEvent {}
+
+class FetchRoutingTableRequested extends LoadBalancingEvent {}
+
+class PingGatewayRequested extends LoadBalancingEvent {
+  final String ipAddress;
+  const PingGatewayRequested(this.ipAddress);
+  @override
+  List<Object?> get props => [ipAddress];
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\load_balancing\load_balancing_state.dart ---
+
+// presentation/bloc/load_balancing/load_balancing_state.dart
+import 'package:dartssh2/dartssh2.dart';
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+
+enum LoadBalancingType { ecmp, pbr }
+
+enum DataStatus { initial, loading, success, failure }
+
+class LoadBalancingState extends Equatable {
+  final DeviceCredentials? credentials;
+  final SSHClient? sshClient; // Holds the active SSH client
+  final LoadBalancingType type;
+  final DataStatus status;
+  final String error;
+
+  final List<RouterInterface> interfaces;
+  final DataStatus interfacesStatus;
+
+  final String? routingTable;
+  final DataStatus routingTableStatus;
+
+  final Map<String, String> pingResults;
+  final DataStatus pingStatus;
+  final String? pingingIp;
+
+  const LoadBalancingState({
+    this.credentials,
+    this.sshClient,
+    this.type = LoadBalancingType.ecmp,
+    this.status = DataStatus.initial,
+    this.error = '',
+    this.interfaces = const [],
+    this.interfacesStatus = DataStatus.initial,
+    this.routingTable,
+    this.routingTableStatus = DataStatus.initial,
+    this.pingResults = const {},
+    this.pingStatus = DataStatus.initial,
+    this.pingingIp,
+  });
+
+  LoadBalancingState copyWith({
+    DeviceCredentials? credentials,
+    SSHClient? sshClient,
+    LoadBalancingType? type,
+    DataStatus? status,
+    String? error,
+    List<RouterInterface>? interfaces,
+    DataStatus? interfacesStatus,
+    String? routingTable,
+    DataStatus? routingTableStatus,
+    Map<String, String>? pingResults,
+    DataStatus? pingStatus,
+    String? pingingIp,
+    bool clearRoutingTable = false,
+    bool clearSshClient = false,
+  }) {
+    return LoadBalancingState(
+      credentials: credentials ?? this.credentials,
+      sshClient: clearSshClient ? null : sshClient ?? this.sshClient,
+      type: type ?? this.type,
+      status: status ?? this.status,
+      error: error ?? this.error,
+      interfaces: interfaces ?? this.interfaces,
+      interfacesStatus: interfacesStatus ?? this.interfacesStatus,
+      routingTable:
+          clearRoutingTable ? null : routingTable ?? this.routingTable,
+      routingTableStatus: routingTableStatus ?? this.routingTableStatus,
+      pingResults: pingResults ?? this.pingResults,
+      pingStatus: pingStatus ?? this.pingStatus,
+      pingingIp: pingingIp ?? this.pingingIp,
+    );
+  }
+
+  @override
+  List<Object?> get props => [
+        credentials,
+        sshClient,
+        type,
+        status,
+        error,
+        interfaces,
+        interfacesStatus,
+        routingTable,
+        routingTableStatus,
+        pingResults,
+        pingStatus,
+        pingingIp
+      ];
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\connection\connection_screen.dart ---
+
+// presentation/screens/connection/connection_screen.dart
+import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
+import 'package:load_balance/presentation/bloc/connection/connection_bloc.dart';
+import 'package:load_balance/presentation/bloc/connection/connection_event.dart';
+import 'package:load_balance/presentation/bloc/connection/connection_state.dart';
+
+enum ConnectionType { ssh, telnet, restApi }
+
+class ConnectionScreen extends StatefulWidget {
+  const ConnectionScreen({super.key});
+
+  @override
+  State<ConnectionScreen> createState() => _ConnectionScreenState();
+}
+
+class _ConnectionScreenState extends State<ConnectionScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _ipController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _enablePasswordController = TextEditingController();
+  bool _isPasswordVisible = false;
+  bool _isEnablePasswordVisible = false;
+
+  ConnectionType _selectedType = ConnectionType.ssh;
+
+  @override
+  void dispose() {
+    _ipController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _enablePasswordController.dispose();
+    super.dispose();
+  }
+
+  void _checkCredentials() {
+    if (_formKey.currentState!.validate()) {
+      context.read<ConnectionBloc>().add(
+            CheckCredentialsRequested(
+              ip: _ipController.text,
+              username: _usernameController.text,
+              password: _passwordController.text,
+              enablePassword: _enablePasswordController.text,
+              type: _selectedType,
+            ),
+          );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Router Connection'),
+      ),
+      body: BlocListener<ConnectionBloc, ConnectionState>(
+        listener: (context, state) {
+          if (state is ConnectionSuccess) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                const SnackBar(
+                  content: Text('Connection Successful!'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            // Navigate and pass credentials to the next screen
+            context.go('/config', extra: state.credentials);
+          } else if (state is ConnectionFailure) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                SnackBar(
+                  content: Text('Error: ${state.error}'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+          }
+        },
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24.0),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Enter Router Credentials',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 32),
+                  TextFormField(
+                    controller: _ipController,
+                    decoration: const InputDecoration(
+                      labelText: 'IP Address',
+                      prefixIcon: Icon(Icons.router),
+                    ),
+                    keyboardType: TextInputType.number,
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please enter an IP address';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _usernameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Username',
+                      prefixIcon: Icon(Icons.person),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please enter a username';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _passwordController,
+                    obscureText: !_isPasswordVisible,
+                    decoration: InputDecoration(
+                      labelText: 'Password',
+                      prefixIcon: const Icon(Icons.lock_outline),
+                      suffixIcon: IconButton(
+                        icon: Icon(_isPasswordVisible
+                            ? Icons.visibility_off
+                            : Icons.visibility),
+                        onPressed: () => setState(
+                            () => _isPasswordVisible = !_isPasswordVisible),
+                      ),
+                    ),
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please enter a password';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Visibility(
+                    visible: _selectedType != ConnectionType.restApi,
+                    child: TextFormField(
+                      controller: _enablePasswordController,
+                      obscureText: !_isEnablePasswordVisible,
+                      decoration: InputDecoration(
+                        labelText: 'Enable Password (optional)',
+                        prefixIcon: const Icon(Icons.lock),
+                        suffixIcon: IconButton(
+                          icon: Icon(_isEnablePasswordVisible
+                              ? Icons.visibility_off
+                              : Icons.visibility),
+                          onPressed: () => setState(() =>
+                              _isEnablePasswordVisible =
+                                  !_isEnablePasswordVisible),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  SegmentedButton<ConnectionType>(
+                    segments: const <ButtonSegment<ConnectionType>>[
+                      ButtonSegment<ConnectionType>(
+                          value: ConnectionType.ssh,
+                          label: Text('SSHv2'),
+                          icon: Icon(Icons.security)),
+                      ButtonSegment<ConnectionType>(
+                          value: ConnectionType.telnet,
+                          label: Text('Telnet'),
+                          icon: Icon(Icons.lan)),
+                      ButtonSegment<ConnectionType>(
+                          value: ConnectionType.restApi,
+                          label: Text('REST API'),
+                          icon: Icon(Icons.http)),
+                    ],
+                    selected: {_selectedType},
+                    onSelectionChanged: (Set<ConnectionType> newSelection) {
+                      setState(() {
+                        _selectedType = newSelection.first;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 32),
+                  BlocBuilder<ConnectionBloc, ConnectionState>(
+                    builder: (context, state) {
+                      if (state is ConnectionLoading) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      return ElevatedButton.icon(
+                        icon: const Icon(Icons.login),
+                        label: const Text('Check Credential'),
+                        onPressed: _checkCredentials,
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          textStyle: const TextStyle(fontSize: 16),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\load_balancing_screen.dart ---
+
+// lib/presentation/screens/load_balancing/load_balancing_screen.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
+import 'package:load_balance/presentation/screens/load_balancing/widgets/ecmp_form.dart';
+import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_form.dart';
+
+class LoadBalancingScreen extends StatefulWidget {
+  final DeviceCredentials credentials;
+  const LoadBalancingScreen({super.key, required this.credentials});
+
+  @override
+  State<LoadBalancingScreen> createState() => _LoadBalancingScreenState();
+}
+
+class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Start the connection and data fetching process when the screen is loaded
+    context.read<LoadBalancingBloc>().add(ScreenStarted(widget.credentials));
+  }
+
+  @override
+  void dispose() {
+    // IMPORTANT: Disconnect the SSH client when leaving the screen to free up resources
+    context.read<LoadBalancingBloc>().add(DisconnectRequested());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Load Balancing Configuration'),
+      ),
+      body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
+        listener: (context, state) {
+          if (state.status == DataStatus.success) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                const SnackBar(
+                  content: Text('Configuration Applied Successfully!'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+          } else if (state.status == DataStatus.failure) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                SnackBar(
+                  content: Text('Error: ${state.error}'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+          }
+        },
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Select Load Balancing Method',
+                style: Theme.of(context).textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+                builder: (context, state) {
+                  return SegmentedButton<LoadBalancingType>(
+                    segments: const <ButtonSegment<LoadBalancingType>>[
+                      ButtonSegment<LoadBalancingType>(
+                        value: LoadBalancingType.ecmp,
+                        label: Text('ECMP'),
+                        icon: Icon(Icons.alt_route),
+                      ),
+                      ButtonSegment<LoadBalancingType>(
+                        value: LoadBalancingType.pbr,
+                        label: Text('PBR'),
+                        icon: Icon(Icons.rule),
+                      ),
+                    ],
+                    selected: {state.type},
+                    onSelectionChanged: (Set<LoadBalancingType> newSelection) {
+                      context
+                          .read<LoadBalancingBloc>()
+                          .add(LoadBalancingTypeSelected(newSelection.first));
+                    },
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+              const _RouterInfoSection(), // Widget for smart features
+              const SizedBox(height: 24),
+              BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+                builder: (context, state) {
+                  if (state.type == LoadBalancingType.ecmp) {
+                    return const EcmpForm();
+                  } else {
+                    return const PbrForm();
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// A private widget to display router info (Interfaces and Routing Table)
+class _RouterInfoSection extends StatelessWidget {
+  const _RouterInfoSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<LoadBalancingBloc>().state;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        title: const Text('Router Information'),
+        subtitle: const Text('View interfaces and routing table'),
+        children: [
+          _buildInterfacesInfo(context, state),
+          const Divider(height: 1),
+          _buildRoutingTableInfo(context, state),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInterfacesInfo(
+      BuildContext context, LoadBalancingState state) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Text('Device Interfaces',
+                style: Theme.of(context).textTheme.titleMedium),
+          ),
+          const SizedBox(height: 8),
+          if (state.interfacesStatus == DataStatus.loading)
+            const Center(child: CircularProgressIndicator())
+          else if (state.interfacesStatus == DataStatus.failure)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: Text('Error fetching interfaces: ${state.error}',
+                  style: const TextStyle(color: Colors.red)),
+            )
+          else if (state.interfaces.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16.0),
+              child: Text('No active interfaces found or connection failed.'),
+            )
+          else
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Interface')),
+                  DataColumn(label: Text('IP Address')),
+                  DataColumn(label: Text('Status')),
+                ],
+                rows: state.interfaces
+                    .map((iface) => DataRow(
+                          cells: [
+                            DataCell(Text(iface.name)),
+                            DataCell(Text(iface.ipAddress)),
+                            DataCell(Text(
+                              iface.status,
+                              style: TextStyle(
+                                  color: iface.status == 'up'
+                                      ? Colors.green
+                                      : Colors.orange),
+                            )),
+                          ],
+                        ))
+                    .toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRoutingTableInfo(
+      BuildContext context, LoadBalancingState state) {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('IP Routing Table',
+                  style: Theme.of(context).textTheme.titleMedium),
+              if (state.routingTableStatus != DataStatus.loading)
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: 'Refresh Routing Table',
+                  onPressed: state.sshClient == null
+                      ? null
+                      : () {
+                          context
+                              .read<LoadBalancingBloc>()
+                              .add(FetchRoutingTableRequested());
+                        },
+                )
+              else
+                const SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (state.routingTableStatus == DataStatus.loading &&
+              state.routingTable == null)
+            const Center(child: Text('Fetching...'))
+          else if (state.routingTable != null)
+            Container(
+              padding: const EdgeInsets.all(8),
+              color: Colors.black.withAlpha((255 * 0.3).round()),
+              width: double.infinity,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Text(
+                  state.routingTable!,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+              ),
+            )
+          else
+            const Text('Press refresh to view the routing table.'),
+        ],
+      ),
+    );
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\widgets\ecmp_form.dart ---
+
+// presentation/screens/load_balancing/widgets/ecmp_form.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
+
+class EcmpForm extends StatefulWidget {
+  const EcmpForm({super.key});
+
+  @override
+  State<EcmpForm> createState() => _EcmpFormState();
+}
+
+class _EcmpFormState extends State<EcmpForm> {
+  final _formKey = GlobalKey<FormState>();
+  final _gateway1Controller = TextEditingController();
+  final _gateway2Controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _gateway1Controller.dispose();
+    _gateway2Controller.dispose();
+    super.dispose();
+  }
+
+  void _applyEcmpConfig() {
+    if (_formKey.currentState!.validate()) {
+      context.read<LoadBalancingBloc>().add(
+            ApplyEcmpConfig(
+              gateway1: _gateway1Controller.text,
+              gateway2: _gateway2Controller.text,
+            ),
+          );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'ECMP Configuration',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                  'Enter the gateway IPs for your two internet connections. Traffic will be distributed equally.'),
+              const SizedBox(height: 24),
+              _buildGatewayTextField(
+                context: context,
+                controller: _gateway1Controller,
+                labelText: 'Gateway IP 1',
+                hintText: 'e.g., 203.0.113.1',
+              ),
+              const SizedBox(height: 16),
+              _buildGatewayTextField(
+                context: context,
+                controller: _gateway2Controller,
+                labelText: 'Gateway IP 2',
+                hintText: 'e.g., 198.51.100.1',
+              ),
+              const SizedBox(height: 32),
+              BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+                builder: (context, state) {
+                  if (state.status == DataStatus.loading) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  return ElevatedButton.icon(
+                    onPressed: _applyEcmpConfig,
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: const Text('Apply Configuration'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Helper widget for gateway text fields with a Test button
+  Widget _buildGatewayTextField({
+    required BuildContext context,
+    required TextEditingController controller,
+    required String labelText,
+    required String hintText,
+  }) {
+    return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+        builder: (context, state) {
+      final ip = controller.text;
+      final isPinging = state.pingStatus == DataStatus.loading && state.pingingIp == ip;
+      final pingResult = state.pingResults[ip];
+
+      return TextFormField(
+        controller: controller,
+        decoration: InputDecoration(
+          labelText: labelText,
+          hintText: hintText,
+          suffixIcon: isPinging
+              ? const Padding(
+                  padding: EdgeInsets.all(12.0),
+                  child: SizedBox(
+                    height: 12,
+                    width: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+                )
+              : IconButton(
+                  icon: const Icon(Icons.network_ping),
+                  tooltip: 'Test Gateway Reachability',
+                  onPressed: ip.isNotEmpty
+                      ? () {
+                          context
+                              .read<LoadBalancingBloc>()
+                              .add(PingGatewayRequested(ip));
+                        }
+                      : null,
+                ),
+          helperText: pingResult,
+          helperStyle: TextStyle(
+            color: pingResult != null && pingResult.contains('Success')
+                ? Colors.green
+                : Colors.orange,
+          )
+        ),
+        keyboardType: TextInputType.number,
+        validator: (value) =>
+            value == null || value.isEmpty ? 'Please enter a Gateway IP' : null,
+      );
+    });
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\widgets\pbr_form.dart ---
+
+
+// presentation/screens/load_balancing/widgets/pbr_form.dart
+import 'package:flutter/material.dart';
+
+class PbrForm extends StatefulWidget {
+  const PbrForm({super.key});
+
+  @override
+  State<PbrForm> createState() => _PbrFormState();
+}
+
+class _PbrFormState extends State<PbrForm> {
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'PBR Configuration',
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+                'Define policies to route specific traffic through different gateways. (Coming Soon)'),
+            const SizedBox(height: 24),
+            // UI elements for PBR will be added here
+            const Center(
+              child: Text(
+                'PBR configuration UI is under development.',
+                style: TextStyle(fontStyle: FontStyle.italic),
+              ),
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton.icon(
+              onPressed: null, // Disabled for now
+              icon: const Icon(Icons.check_circle_outline),
+              label: const Text('Apply Configuration'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
