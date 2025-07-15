@@ -20,14 +20,13 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   @override
   void initState() {
     super.initState();
-    // Start the connection and data fetching process when the screen is loaded
+    // Start the process by passing credentials to the BLoC.
     context.read<LoadBalancingBloc>().add(ScreenStarted(widget.credentials));
   }
 
+  // The dispose method is no longer needed to manage the connection.
   @override
   void dispose() {
-    // IMPORTANT: Disconnect the SSH client when leaving the screen to free up resources
-    context.read<LoadBalancingBloc>().add(DisconnectRequested());
     super.dispose();
   }
 
@@ -210,7 +209,8 @@ class _RouterInfoSection extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Refresh Routing Table',
-                  onPressed: state.sshClient == null
+                  // FIX: The button is enabled as long as we have credentials.
+                  onPressed: state.credentials == null
                       ? null
                       : () {
                           context

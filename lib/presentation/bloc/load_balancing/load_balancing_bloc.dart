@@ -1,124 +1,71 @@
-// presentation/bloc/load_balancing/load_balancing_bloc.dart
+// lib/presentation/bloc/load_balancing/load_balancing_bloc.dart
 import 'dart:async';
-import 'package:dartssh2/dartssh2.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:load_balance/data/datasources/remote_datasource.dart';
+import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/usecases/get_interfaces.dart';
+import 'package:load_balance/domain/usecases/get_routing_table.dart';
+import 'package:load_balance/domain/usecases/ping_gateway.dart';
 import 'load_balancing_event.dart';
 import 'load_balancing_state.dart';
 
 class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
-  final RemoteDataSource _remoteDataSource;
+  final GetInterfaces getInterfaces;
+  final GetRoutingTable getRoutingTable;
+  final PingGateway pingGateway;
 
-  LoadBalancingBloc({required RemoteDataSource remoteDataSource})
-      : _remoteDataSource = remoteDataSource,
-        super(const LoadBalancingState()) {
+  LoadBalancingBloc({
+    required this.getInterfaces,
+    required this.getRoutingTable,
+    required this.pingGateway,
+  }) : super(const LoadBalancingState()) {
     on<ScreenStarted>(_onScreenStarted);
-    on<DisconnectRequested>(_onDisconnectRequested);
     on<FetchInterfacesRequested>(_onFetchInterfaces);
     on<FetchRoutingTableRequested>(_onFetchRoutingTable);
     on<PingGatewayRequested>(_onPingGateway);
-    on<LoadBalancingTypeSelected>(
-        (event, emit) => emit(state.copyWith(type: event.type)));
+    on<LoadBalancingTypeSelected>((event, emit) => emit(state.copyWith(type: event.type)));
+    on<ApplyEcmpConfig>(_onApplyEcmpConfig);
   }
 
-  Future<void> _onScreenStarted(
-    ScreenStarted event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient != null && !state.sshClient!.isClosed) return;
-
-    emit(state.copyWith(
-        credentials: event.credentials, interfacesStatus: DataStatus.loading));
-
-    try {
-      final socket = await SSHSocket.connect(event.credentials.ip, 22,
-          timeout: const Duration(seconds: 10));
-
-      final client = SSHClient(
-        socket,
-        username: event.credentials.username,
-        onPasswordRequest: () => event.credentials.password,
-      );
-
-      emit(state.copyWith(sshClient: client));
-      add(FetchInterfacesRequested());
-    } catch (e) {
-      emit(state.copyWith(
-          interfacesStatus: DataStatus.failure,
-          error: 'Failed to connect: ${e.toString()}'));
-    }
+  void _onScreenStarted(ScreenStarted event, Emitter<LoadBalancingState> emit) {
+    // Simply store the credentials and trigger the initial data fetch.
+    emit(state.copyWith(credentials: event.credentials));
+    add(FetchInterfacesRequested());
   }
 
-  Future<void> _onDisconnectRequested(
-    DisconnectRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    state.sshClient?.close();
-    emit(state.copyWith(clearSshClient: true));
-    debugPrint("SSH Client disconnected.");
-  }
-
-  Future<void> _onFetchInterfaces(
-    FetchInterfacesRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient == null) return;
+  Future<void> _onFetchInterfaces(FetchInterfacesRequested event, Emitter<LoadBalancingState> emit) async {
+    if (state.credentials == null) return;
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
     try {
-      final interfaces =
-          await _remoteDataSource.fetchInterfaces(state.sshClient!);
-      emit(state.copyWith(
-          interfaces: interfaces, interfacesStatus: DataStatus.success));
-    } catch (e) {
-      emit(state.copyWith(
-          interfacesStatus: DataStatus.failure, error: e.toString()));
+      // Pass credentials for each request.
+      final interfaces = await getInterfaces(state.credentials!);
+      emit(state.copyWith(interfaces: interfaces, interfacesStatus: DataStatus.success));
+    } on ServerFailure catch (e) {
+      emit(state.copyWith(interfacesStatus: DataStatus.failure, error: e.message));
     }
   }
 
-  Future<void> _onFetchRoutingTable(
-    FetchRoutingTableRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient == null) return;
-    emit(state.copyWith(
-        routingTableStatus: DataStatus.loading, clearRoutingTable: true));
+  Future<void> _onFetchRoutingTable(FetchRoutingTableRequested event, Emitter<LoadBalancingState> emit) async {
+    if (state.credentials == null) return;
+    emit(state.copyWith(routingTableStatus: DataStatus.loading, clearRoutingTable: true));
     try {
-      final table = await _remoteDataSource.getRoutingTable(state.sshClient!);
-      emit(state.copyWith(
-          routingTable: table, routingTableStatus: DataStatus.success));
-    } catch (e) {
-      emit(state.copyWith(
-          routingTable: "Error: ${e.toString()}",
-          routingTableStatus: DataStatus.failure));
+      // Pass credentials for each request.
+      final table = await getRoutingTable(state.credentials!);
+      emit(state.copyWith(routingTable: table, routingTableStatus: DataStatus.success));
+    } on ServerFailure catch (e) {
+      emit(state.copyWith(routingTable: e.message, routingTableStatus: DataStatus.failure));
     }
   }
 
-  Future<void> _onPingGateway(
-    PingGatewayRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient == null) return;
-    emit(state.copyWith(
-        pingStatus: DataStatus.loading, pingingIp: event.ipAddress));
-    try {
-      final result =
-          await _remoteDataSource.pingGateway(state.sshClient!, event.ipAddress);
-      final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[event.ipAddress] = result;
-      emit(state.copyWith(
-        pingResults: newPingResults,
-        pingStatus: DataStatus.success,
-        pingingIp: '',
-      ));
-    } catch (e) {
-      final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[event.ipAddress] = 'Error: ${e.toString()}';
-      emit(state.copyWith(
-        pingResults: newPingResults,
-        pingStatus: DataStatus.failure,
-        pingingIp: '',
-      ));
-    }
+  Future<void> _onPingGateway(PingGatewayRequested event, Emitter<LoadBalancingState> emit) async {
+    if (state.credentials == null) return;
+    emit(state.copyWith(pingStatus: DataStatus.loading, pingingIp: event.ipAddress));
+    final result = await pingGateway(credentials: state.credentials!, ipAddress: event.ipAddress);
+    final newPingResults = Map<String, String>.from(state.pingResults);
+    newPingResults[event.ipAddress] = result;
+    emit(state.copyWith(pingResults: newPingResults, pingStatus: DataStatus.success, pingingIp: ''));
+  }
+
+  Future<void> _onApplyEcmpConfig(ApplyEcmpConfig event, Emitter<LoadBalancingState> emit) async {
+    // Logic to apply ECMP config will go here.
   }
 }
