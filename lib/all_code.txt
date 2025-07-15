@@ -5,11 +5,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/router/app_router.dart';
-import 'package:load_balance/data/datasources/remote_datasource.dart';
 import 'package:load_balance/data/datasources/remote_datasource_impl.dart';
 import 'package:load_balance/data/repositories/device_repository_impl.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
 import 'package:load_balance/domain/usecases/check_credentials.dart';
+import 'package:load_balance/domain/usecases/get_interfaces.dart';
+import 'package:load_balance/domain/usecases/get_routing_table.dart';
+import 'package:load_balance/domain/usecases/ping_gateway.dart';
 import 'package:load_balance/presentation/bloc/connection/connection_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 
@@ -22,34 +24,26 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MultiRepositoryProvider(
-      providers: [
-        // RepositoryProvider for the original repository structure
-        RepositoryProvider<DeviceRepository>(
-          create: (context) => DeviceRepositoryImpl(
-            // The datasource is now also provided separately for the new BLoC
-            remoteDataSource: RemoteDataSourceImpl(),
-          ),
-        ),
-        // Provide the datasource implementation directly for the LoadBalancingBloc
-        RepositoryProvider<RemoteDataSource>(
-          create: (context) => RemoteDataSourceImpl(),
-        ),
-      ],
+    return RepositoryProvider<DeviceRepository>(
+      create: (context) => DeviceRepositoryImpl(
+        remoteDataSource: RemoteDataSourceImpl(),
+      ),
       child: MultiBlocProvider(
         providers: [
           BlocProvider(
             create: (context) => ConnectionBloc(
-              checkCredentials: CheckCredentials(
-                context.read<DeviceRepository>(),
-              ),
+              checkCredentials: CheckCredentials(context.read<DeviceRepository>()),
             ),
           ),
           BlocProvider(
-            create: (context) => LoadBalancingBloc(
-              // The BLoC now directly depends on the datasource to manage the connection
-              remoteDataSource: context.read<RemoteDataSource>(),
-            ),
+            create: (context) {
+              final repository = context.read<DeviceRepository>();
+              return LoadBalancingBloc(
+                getInterfaces: GetInterfaces(repository),
+                getRoutingTable: GetRoutingTable(repository),
+                pingGateway: PingGateway(repository),
+              );
+            },
           ),
         ],
         child: MaterialApp.router(
@@ -58,25 +52,10 @@ class MyApp extends StatelessWidget {
             primarySwatch: Colors.blue,
             useMaterial3: true,
             brightness: Brightness.dark,
-            cardTheme: CardThemeData(
-              elevation: 2,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12.0),
-              ),
-            ),
-            inputDecorationTheme: const InputDecorationTheme(
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.all(Radius.circular(12.0)),
-              ),
-            ),
+            cardTheme: CardThemeData(elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0))),
+            inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12.0)))),
             segmentedButtonTheme: SegmentedButtonThemeData(
-              style: ButtonStyle(
-                shape: WidgetStateProperty.all(
-                  RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12.0),
-                  ),
-                ),
-              ),
+              style: ButtonStyle(shape: WidgetStateProperty.all(RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)))),
             ),
           ),
           routerConfig: AppRouter.router,
@@ -85,6 +64,23 @@ class MyApp extends StatelessWidget {
     );
   }
 }
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\test.dart ---
+
+// import 'dart:convert';
+// import 'package:dartssh2/dartssh2.dart';
+
+// void main() async {
+//   final socket = await SSHSocket.connect('192.168.85.91', 22);
+//   final client = SSHClient(
+//     socket,
+//     username: 'cisco',
+//     onPasswordRequest: () => 'cisco',
+//   );
+//   final result = await client.run('show ip interface brief');
+//   print(utf8.decode(result));
+//   client.close();
+// }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\core\error\failure.dart ---
 
@@ -143,17 +139,14 @@ class AppRouter {
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource.dart ---
 
 // lib/data/datasources/remote_datasource.dart
-import 'package:dartssh2/dartssh2.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 abstract class RemoteDataSource {
-  // FIX: Add this method signature back for REST API checks.
   Future<void> checkRestApiCredentials(DeviceCredentials credentials);
-
-  Future<List<RouterInterface>> fetchInterfaces(SSHClient client);
-  Future<String> pingGateway(SSHClient client, String ipAddress);
-  Future<String> getRoutingTable(SSHClient client);
+  Future<List<RouterInterface>> fetchInterfaces(DeviceCredentials credentials);
+  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
+  Future<String> getRoutingTable(DeviceCredentials credentials);
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource_impl.dart ---
@@ -161,21 +154,151 @@ abstract class RemoteDataSource {
 // lib/data/datasources/remote_datasource_impl.dart
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
-import 'package:flutter/foundation.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
-import 'package:load_balance/domain/entities/router_interface.dart';
-import 'package:load_balance/data/datasources/remote_datasource.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
-import 'dart:io';
 import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+import 'remote_datasource.dart';
 
 class RemoteDataSourceImpl implements RemoteDataSource {
   static const _commandTimeout = Duration(seconds: 15);
 
+  /// Helper to establish a new SSH client connection for each request.
+  Future<SSHClient> _createSshClient(DeviceCredentials credentials) async {
+    try {
+      final socket = await SSHSocket.connect(credentials.ip, 22,
+          timeout: const Duration(seconds: 10));
+      return SSHClient(
+        socket,
+        username: credentials.username,
+        onPasswordRequest: () => credentials.password,
+      );
+    } on TimeoutException {
+      throw const ServerFailure('Connection timed out.');
+    } on SocketException {
+      throw const ServerFailure('Could not connect to host.');
+    } catch (e) {
+      if (e.toString().toLowerCase().contains('auth')) {
+        throw const ServerFailure('Authentication failed.');
+      }
+      throw ServerFailure('SSH Error: ${e.toString()}');
+    }
+  }
+
+  @override
+  Future<List<RouterInterface>> fetchInterfaces(
+      DeviceCredentials credentials) async {
+    SSHClient? client;
+    try {
+      client = await _createSshClient(credentials);
+      final result =
+          await client.run('show ip interface brief').timeout(_commandTimeout);
+      final decodedResult = utf8.decode(result);
+      final lines = decodedResult.split('\n');
+      final interfaces = <RouterInterface>[];
+      final regex = RegExp(
+          r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
+
+      for (final line in lines) {
+        final match = regex.firstMatch(line);
+        if (match != null) {
+          interfaces.add(RouterInterface(
+            name: match.group(1)!,
+            ipAddress: match.group(2)!,
+            status: match.group(3)!,
+          ));
+        }
+      }
+      return interfaces;
+    } finally {
+      client?.close();
+    }
+  }
+
+  @override
+  Future<String> getRoutingTable(DeviceCredentials credentials) async {
+    SSHClient? client;
+    try {
+      client = await _createSshClient(credentials);
+      // Use the reliable interactive shell method for this multi-step command.
+      final shell = await client.shell(
+        pty: SSHPtyConfig(type: 'xterm', width: 120, height: 80),
+      );
+
+      final completer = Completer<String>();
+      final buffer = StringBuffer();
+      late StreamSubscription subscription;
+      const prompt = '#';
+      int promptCount = 0;
+
+      subscription = shell.stdout.listen(
+        (data) {
+          final decodedString = utf8.decode(data, allowMalformed: true);
+          buffer.write(decodedString);
+          if (decodedString.trim().endsWith(prompt)) {
+            promptCount++;
+            if (promptCount == 1) {
+              shell.stdin.add(utf8.encode('terminal length 0\n'));
+            } else if (promptCount == 2) {
+              shell.stdin.add(utf8.encode('show ip route\n'));
+            } else if (promptCount == 3) {
+              if (!completer.isCompleted) {
+                subscription.cancel();
+                final fullOutput = buffer.toString();
+                final startOfOutput = fullOutput.indexOf('show ip route\r\n');
+                final endOfOutput = fullOutput.lastIndexOf(prompt);
+                if (startOfOutput != -1 && endOfOutput > startOfOutput) {
+                  final commandAndNewlineLength = 'show ip route\r\n'.length;
+                  final relevantOutput = fullOutput.substring(
+                      startOfOutput + commandAndNewlineLength, endOfOutput);
+                  completer.complete(relevantOutput.trim());
+                } else {
+                  completer.complete(fullOutput.trim());
+                }
+              }
+            }
+          }
+        },
+        onError: (error) =>
+            !completer.isCompleted ? completer.completeError(error) : null,
+        onDone: () => !completer.isCompleted
+            ? completer.complete(buffer.toString().trim())
+            : null,
+      );
+
+      return await completer.future.timeout(_commandTimeout);
+    } finally {
+      client?.close();
+    }
+  }
+
+  @override
+  Future<String> pingGateway(
+      DeviceCredentials credentials, String ipAddress) async {
+    SSHClient? client;
+    try {
+      client = await _createSshClient(credentials);
+      final result =
+          await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
+      final decodedResult = utf8.decode(result);
+      if (decodedResult.contains('!!!')) {
+        return 'Success! Gateway is reachable.';
+      } else if (decodedResult.contains('...')) {
+        return 'Timeout. Gateway is not reachable.';
+      } else {
+        return 'Ping failed. Check IP or connectivity.';
+      }
+    } finally {
+      client?.close();
+    }
+  }
+
   @override
   Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
+    // REST API is stateless and doesn't need the same connection management.
     final dio = Dio();
     final String basicAuth =
         'Basic ${base64Encode(utf8.encode('${credentials.username}:${credentials.password}'))}';
@@ -185,14 +308,13 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           (X509Certificate cert, String host, int port) => true;
       return client;
     };
-
     try {
       await dio.get(
         'https://${credentials.ip}/restconf/data/Cisco-IOS-XE-native:native',
         options: Options(
           headers: {
             'Authorization': basicAuth,
-            'Accept': 'application/yang-data+json',
+            'Accept': 'application/yang-data+json'
           },
           receiveTimeout: const Duration(seconds: 10),
         ),
@@ -213,133 +335,11 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       throw ServerFailure('An unknown error occurred: ${e.toString()}');
     }
   }
-
-  @override
-  Future<List<RouterInterface>> fetchInterfaces(SSHClient client) async {
-    final result =
-        await client.run('show ip interface brief').timeout(_commandTimeout);
-    final decodedResult = utf8.decode(result);
-    final lines = decodedResult.split('\n');
-    final interfaces = <RouterInterface>[];
-    final regex = RegExp(
-        r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
-
-    for (final line in lines) {
-      final match = regex.firstMatch(line);
-      if (match != null) {
-        interfaces.add(RouterInterface(
-          name: match.group(1)!,
-          ipAddress: match.group(2)!,
-          status: match.group(3)!,
-        ));
-      }
-    }
-    return interfaces;
-  }
-
-  @override
-  Future<String> pingGateway(SSHClient client, String ipAddress) async {
-    final result =
-        await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
-    final decodedResult = utf8.decode(result);
-    if (decodedResult.contains('!!!')) {
-      return 'Success! Gateway is reachable.';
-    } else if (decodedResult.contains('...')) {
-      return 'Timeout. Gateway is not reachable.';
-    } else {
-      return 'Ping failed. Check IP or connectivity.';
-    }
-  }
-
-  @override
-  Future<String> getRoutingTable(SSHClient client) async {
-    final shell = await client.shell(
-      pty: SSHPtyConfig(
-        type: 'xterm', // FINAL CORRECTION: The parameter is 'type', not 'term'.
-        width: 120,
-        height: 80,
-      ),
-    );
-
-    final completer = Completer<String>();
-    final buffer = StringBuffer();
-    late StreamSubscription subscription;
-    const prompt = '#';
-    int promptCount = 0; // To track prompts and execute commands sequentially
-
-    subscription = shell.stdout.listen(
-      (data) {
-        final decodedString = utf8.decode(data, allowMalformed: true);
-        debugPrint('--- SSH SHELL STDOUT ---\n$decodedString\n------------------------');
-        buffer.write(decodedString);
-
-        if (decodedString.trim().endsWith(prompt)) {
-          promptCount++;
-          if (promptCount == 1) {
-            // First prompt received (after login), now send the 'terminal length' command.
-            shell.stdin.add(utf8.encode('terminal length 0\n'));
-          } else if (promptCount == 2) {
-            // Second prompt received (after 'terminal length'), now send the main command.
-            shell.stdin.add(utf8.encode('show ip route\n'));
-          } else if (promptCount == 3) {
-            // Third prompt received (after 'show ip route'), we have the full output.
-            if (!completer.isCompleted) {
-              subscription.cancel();
-              
-              var fullOutput = buffer.toString();
-              // Find the output between the second and third command execution
-              final startOfOutput = fullOutput.indexOf('show ip route\r\n');
-              final endOfOutput = fullOutput.lastIndexOf(prompt);
-
-              if (startOfOutput != -1 && endOfOutput > startOfOutput) {
-                 final commandAndNewlineLength = 'show ip route\r\n'.length;
-                 final relevantOutput = fullOutput.substring(startOfOutput + commandAndNewlineLength, endOfOutput);
-                 completer.complete(relevantOutput.trim());
-              } else {
-                 // Fallback in case the output format is unexpected
-                 completer.complete(fullOutput.trim()); 
-              }
-            }
-          }
-        }
-      },
-      onError: (error) {
-        if (!completer.isCompleted) {
-          subscription.cancel();
-          completer.completeError(error);
-        }
-      },
-      onDone: () {
-        if (!completer.isCompleted) {
-          subscription.cancel();
-          completer.complete(buffer.toString().trim());
-        }
-      },
-    );
-
-    // The logic is now event-driven by listening for prompts, so we don't need to send commands here initially.
-    // The listener will send them once the connection is ready.
-
-    return completer.future.timeout(
-      _commandTimeout,
-      onTimeout: () {
-        if (!completer.isCompleted) {
-          subscription.cancel();
-          if (buffer.isNotEmpty) {
-            return buffer.toString().trim();
-          }
-          throw TimeoutException('Fetching routing table timed out.');
-        }
-        return completer.future;
-      },
-    );
-  }
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\repositories\device_repository_impl.dart ---
 
-// data/repositories/device_repository_impl.dart
-import 'package:dartssh2/dartssh2.dart';
+// lib/data/repositories/device_repository_impl.dart
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/data/datasources/remote_datasource.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
@@ -354,61 +354,54 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<void> checkCredentials(DeviceCredentials credentials) async {
-    // FIX: This method now handles the connection logic based on the type.
+    // This method now handles the connection logic based on the type.
     if (credentials.type == ConnectionType.ssh) {
-      // For SSH, we create a temporary client just to check credentials, then close it.
-      // The persistent connection will be managed by the LoadBalancingBloc later.
-      SSHClient? client;
+      // Create a temporary client just to check credentials, then close it.
       try {
-        client = SSHClient(
-          await SSHSocket.connect(credentials.ip, 22,
-              timeout: const Duration(seconds: 10)),
-          username: credentials.username,
-          onPasswordRequest: () => credentials.password,
-        );
-        // If the line above doesn't throw an error, credentials are valid.
+        await remoteDataSource.fetchInterfaces(credentials);
+      } on ServerFailure catch (e) {
+        throw ServerFailure(e.message);
       } catch (e) {
-        // Re-throw as a standardized ServerFailure
-        if (e.toString().toLowerCase().contains('auth')) {
-          throw const ServerFailure('Authentication failed.');
-        } else {
-          throw const ServerFailure('Could not connect to host.');
-        }
-      } finally {
-        client?.close();
+        throw ServerFailure(e.toString());
       }
     } else if (credentials.type == ConnectionType.restApi) {
-      // For REST API, we use the datasource method as before.
       return await remoteDataSource.checkRestApiCredentials(credentials);
     } else {
       throw const ServerFailure('Telnet is not implemented.');
     }
   }
 
-  // --- The methods below are no longer used in the new architecture ---
-  // The LoadBalancingBloc now communicates directly with the RemoteDataSource.
-  // We keep them here to satisfy the DeviceRepository interface but throw an error
-  // to prevent accidental use.
-
   @override
-  Future<List<RouterInterface>> getInterfaces(
-      DeviceCredentials credentials) async {
-    throw UnimplementedError(
-        'This method is deprecated. Use LoadBalancingBloc instead.');
+  Future<List<RouterInterface>> getInterfaces(DeviceCredentials credentials) async {
+    try {
+      return await remoteDataSource.fetchInterfaces(credentials);
+    } on ServerFailure catch (e) {
+      throw ServerFailure(e.message);
+    } catch (e) {
+      throw ServerFailure(e.toString());
+    }
   }
 
   @override
-  Future<String> pingGateway(
-      {required DeviceCredentials credentials,
-      required String ipAddress}) async {
-    throw UnimplementedError(
-        'This method is deprecated. Use LoadBalancingBloc instead.');
+  Future<String> pingGateway({required DeviceCredentials credentials, required String ipAddress}) async {
+    try {
+      return await remoteDataSource.pingGateway(credentials, ipAddress);
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return e.toString();
+    }
   }
 
   @override
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
-    throw UnimplementedError(
-        'This method is deprecated. Use LoadBalancingBloc instead.');
+    try {
+      return await remoteDataSource.getRoutingTable(credentials);
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return e.toString();
+    }
   }
 }
 
@@ -665,199 +658,81 @@ class ConnectionFailure extends ConnectionState {
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\load_balancing\load_balancing_bloc.dart ---
 
-// presentation/bloc/load_balancing/load_balancing_bloc.dart
+// lib/presentation/bloc/load_balancing/load_balancing_bloc.dart
 import 'dart:async';
-import 'package:dartssh2/dartssh2.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:load_balance/data/datasources/remote_datasource.dart';
+import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/usecases/get_interfaces.dart';
+import 'package:load_balance/domain/usecases/get_routing_table.dart';
+import 'package:load_balance/domain/usecases/ping_gateway.dart';
 import 'load_balancing_event.dart';
 import 'load_balancing_state.dart';
 
 class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
-  final RemoteDataSource _remoteDataSource;
+  final GetInterfaces getInterfaces;
+  final GetRoutingTable getRoutingTable;
+  final PingGateway pingGateway;
 
-  LoadBalancingBloc({required RemoteDataSource remoteDataSource})
-    : _remoteDataSource = remoteDataSource,
-      super(const LoadBalancingState()) {
+  LoadBalancingBloc({
+    required this.getInterfaces,
+    required this.getRoutingTable,
+    required this.pingGateway,
+  }) : super(const LoadBalancingState()) {
     on<ScreenStarted>(_onScreenStarted);
-    on<DisconnectRequested>(_onDisconnectRequested);
     on<FetchInterfacesRequested>(_onFetchInterfaces);
     on<FetchRoutingTableRequested>(_onFetchRoutingTable);
     on<PingGatewayRequested>(_onPingGateway);
-    on<LoadBalancingTypeSelected>(
-      (event, emit) => emit(state.copyWith(type: event.type)),
-    );
-    // FIX: Add the event handler for applying ECMP config
+    on<LoadBalancingTypeSelected>((event, emit) => emit(state.copyWith(type: event.type)));
     on<ApplyEcmpConfig>(_onApplyEcmpConfig);
   }
 
-  // FIX: Add the handler method implementation
-  Future<void> _onApplyEcmpConfig(
-    ApplyEcmpConfig event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient == null) return;
-    emit(state.copyWith(status: DataStatus.loading));
-    try {
-      // Here you would add the actual SSH commands to apply the config
-      // For now, we simulate a successful operation.
-      debugPrint(
-        'Applying ECMP with Gateway1: ${event.gateway1}, Gateway2: ${event.gateway2}',
-      );
-      await Future.delayed(
-        const Duration(seconds: 2),
-      ); // Simulate network delay
-      emit(state.copyWith(status: DataStatus.success));
-    } catch (e) {
-      emit(state.copyWith(status: DataStatus.failure, error: e.toString()));
-    }
+  void _onScreenStarted(ScreenStarted event, Emitter<LoadBalancingState> emit) {
+    // Simply store the credentials and trigger the initial data fetch.
+    emit(state.copyWith(credentials: event.credentials));
+    add(FetchInterfacesRequested());
   }
 
-  Future<void> _onScreenStarted(
-    ScreenStarted event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient != null && !state.sshClient!.isClosed) return;
-
-    emit(
-      state.copyWith(
-        credentials: event.credentials,
-        interfacesStatus: DataStatus.loading,
-      ),
-    );
-
-    try {
-      final socket = await SSHSocket.connect(
-        event.credentials.ip,
-        22,
-        timeout: const Duration(seconds: 10),
-      );
-
-      final client = SSHClient(
-        socket,
-        username: event.credentials.username,
-        onPasswordRequest: () => event.credentials.password,
-      );
-
-      emit(state.copyWith(sshClient: client));
-      add(FetchInterfacesRequested());
-    } catch (e) {
-      emit(
-        state.copyWith(
-          interfacesStatus: DataStatus.failure,
-          error: 'Failed to connect: ${e.toString()}',
-        ),
-      );
-    }
-  }
-
-  Future<void> _onDisconnectRequested(
-    DisconnectRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    state.sshClient?.close();
-    emit(state.copyWith(clearSshClient: true));
-    debugPrint("SSH Client disconnected.");
-  }
-
-  Future<void> _onFetchInterfaces(
-    FetchInterfacesRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient == null) return;
+  Future<void> _onFetchInterfaces(FetchInterfacesRequested event, Emitter<LoadBalancingState> emit) async {
+    if (state.credentials == null) return;
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
     try {
-      final interfaces = await _remoteDataSource.fetchInterfaces(
-        state.sshClient!,
-      );
-      emit(
-        state.copyWith(
-          interfaces: interfaces,
-          interfacesStatus: DataStatus.success,
-        ),
-      );
-    } catch (e) {
-      emit(
-        state.copyWith(
-          interfacesStatus: DataStatus.failure,
-          error: e.toString(),
-        ),
-      );
+      // Pass credentials for each request.
+      final interfaces = await getInterfaces(state.credentials!);
+      emit(state.copyWith(interfaces: interfaces, interfacesStatus: DataStatus.success));
+    } on ServerFailure catch (e) {
+      emit(state.copyWith(interfacesStatus: DataStatus.failure, error: e.message));
     }
   }
 
-  Future<void> _onFetchRoutingTable(
-    FetchRoutingTableRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient == null) return;
-    emit(
-      state.copyWith(
-        routingTableStatus: DataStatus.loading,
-        clearRoutingTable: true,
-      ),
-    );
+  Future<void> _onFetchRoutingTable(FetchRoutingTableRequested event, Emitter<LoadBalancingState> emit) async {
+    if (state.credentials == null) return;
+    emit(state.copyWith(routingTableStatus: DataStatus.loading, clearRoutingTable: true));
     try {
-      final table = await _remoteDataSource.getRoutingTable(state.sshClient!);
-      emit(
-        state.copyWith(
-          routingTable: table,
-          routingTableStatus: DataStatus.success,
-        ),
-      );
-    } catch (e) {
-      emit(
-        state.copyWith(
-          routingTable: "Error: ${e.toString()}",
-          routingTableStatus: DataStatus.failure,
-        ),
-      );
+      // Pass credentials for each request.
+      final table = await getRoutingTable(state.credentials!);
+      emit(state.copyWith(routingTable: table, routingTableStatus: DataStatus.success));
+    } on ServerFailure catch (e) {
+      emit(state.copyWith(routingTable: e.message, routingTableStatus: DataStatus.failure));
     }
   }
 
-  Future<void> _onPingGateway(
-    PingGatewayRequested event,
-    Emitter<LoadBalancingState> emit,
-  ) async {
-    if (state.sshClient == null) return;
-    emit(
-      state.copyWith(
-        pingStatus: DataStatus.loading,
-        pingingIp: event.ipAddress,
-      ),
-    );
-    try {
-      final result = await _remoteDataSource.pingGateway(
-        state.sshClient!,
-        event.ipAddress,
-      );
-      final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[event.ipAddress] = result;
-      emit(
-        state.copyWith(
-          pingResults: newPingResults,
-          pingStatus: DataStatus.success,
-          pingingIp: '',
-        ),
-      );
-    } catch (e) {
-      final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[event.ipAddress] = 'Error: ${e.toString()}';
-      emit(
-        state.copyWith(
-          pingResults: newPingResults,
-          pingStatus: DataStatus.failure,
-          pingingIp: '',
-        ),
-      );
-    }
+  Future<void> _onPingGateway(PingGatewayRequested event, Emitter<LoadBalancingState> emit) async {
+    if (state.credentials == null) return;
+    emit(state.copyWith(pingStatus: DataStatus.loading, pingingIp: event.ipAddress));
+    final result = await pingGateway(credentials: state.credentials!, ipAddress: event.ipAddress);
+    final newPingResults = Map<String, String>.from(state.pingResults);
+    newPingResults[event.ipAddress] = result;
+    emit(state.copyWith(pingResults: newPingResults, pingStatus: DataStatus.success, pingingIp: ''));
+  }
+
+  Future<void> _onApplyEcmpConfig(ApplyEcmpConfig event, Emitter<LoadBalancingState> emit) async {
+    // Logic to apply ECMP config will go here.
   }
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\load_balancing\load_balancing_event.dart ---
 
-// presentation/bloc/load_balancing/load_balancing_event.dart
+// lib/presentation/bloc/load_balancing/load_balancing_event.dart
 import 'package:equatable/equatable.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
@@ -875,8 +750,6 @@ class ScreenStarted extends LoadBalancingEvent {
   List<Object?> get props => [credentials];
 }
 
-class DisconnectRequested extends LoadBalancingEvent {}
-
 class LoadBalancingTypeSelected extends LoadBalancingEvent {
   final LoadBalancingType type;
   const LoadBalancingTypeSelected(this.type);
@@ -885,7 +758,6 @@ class LoadBalancingTypeSelected extends LoadBalancingEvent {
 }
 
 class FetchInterfacesRequested extends LoadBalancingEvent {}
-
 class FetchRoutingTableRequested extends LoadBalancingEvent {}
 
 class PingGatewayRequested extends LoadBalancingEvent {
@@ -895,32 +767,26 @@ class PingGatewayRequested extends LoadBalancingEvent {
   List<Object?> get props => [ipAddress];
 }
 
-// FIX: Add this event class back
 class ApplyEcmpConfig extends LoadBalancingEvent {
   final String gateway1;
   final String gateway2;
-
   const ApplyEcmpConfig({required this.gateway1, required this.gateway2});
-
   @override
   List<Object> get props => [gateway1, gateway2];
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\load_balancing\load_balancing_state.dart ---
 
-// presentation/bloc/load_balancing/load_balancing_state.dart
-import 'package:dartssh2/dartssh2.dart';
+// lib/presentation/bloc/load_balancing/load_balancing_state.dart
 import 'package:equatable/equatable.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 enum LoadBalancingType { ecmp, pbr }
-
 enum DataStatus { initial, loading, success, failure }
 
 class LoadBalancingState extends Equatable {
-  final DeviceCredentials? credentials;
-  final SSHClient? sshClient; // Holds the active SSH client
+  final DeviceCredentials? credentials; // Holds the credentials to be used for each request
   final LoadBalancingType type;
   final DataStatus status;
   final String error;
@@ -937,7 +803,6 @@ class LoadBalancingState extends Equatable {
 
   const LoadBalancingState({
     this.credentials,
-    this.sshClient,
     this.type = LoadBalancingType.ecmp,
     this.status = DataStatus.initial,
     this.error = '',
@@ -952,7 +817,6 @@ class LoadBalancingState extends Equatable {
 
   LoadBalancingState copyWith({
     DeviceCredentials? credentials,
-    SSHClient? sshClient,
     LoadBalancingType? type,
     DataStatus? status,
     String? error,
@@ -964,18 +828,15 @@ class LoadBalancingState extends Equatable {
     DataStatus? pingStatus,
     String? pingingIp,
     bool clearRoutingTable = false,
-    bool clearSshClient = false,
   }) {
     return LoadBalancingState(
       credentials: credentials ?? this.credentials,
-      sshClient: clearSshClient ? null : sshClient ?? this.sshClient,
       type: type ?? this.type,
       status: status ?? this.status,
       error: error ?? this.error,
       interfaces: interfaces ?? this.interfaces,
       interfacesStatus: interfacesStatus ?? this.interfacesStatus,
-      routingTable:
-          clearRoutingTable ? null : routingTable ?? this.routingTable,
+      routingTable: clearRoutingTable ? null : routingTable ?? this.routingTable,
       routingTableStatus: routingTableStatus ?? this.routingTableStatus,
       pingResults: pingResults ?? this.pingResults,
       pingStatus: pingStatus ?? this.pingStatus,
@@ -985,18 +846,8 @@ class LoadBalancingState extends Equatable {
 
   @override
   List<Object?> get props => [
-        credentials,
-        sshClient,
-        type,
-        status,
-        error,
-        interfaces,
-        interfacesStatus,
-        routingTable,
-        routingTableStatus,
-        pingResults,
-        pingStatus,
-        pingingIp
+        credentials, type, status, error, interfaces, interfacesStatus,
+        routingTable, routingTableStatus, pingResults, pingStatus, pingingIp
       ];
 }
 
@@ -1242,21 +1093,22 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   @override
   void initState() {
     super.initState();
-    // Start the connection and data fetching process when the screen is loaded
+    // Start the process by passing credentials to the BLoC.
     context.read<LoadBalancingBloc>().add(ScreenStarted(widget.credentials));
   }
 
+  // The dispose method is no longer needed to manage the connection.
   @override
   void dispose() {
-    // IMPORTANT: Disconnect the SSH client when leaving the screen to free up resources
-    context.read<LoadBalancingBloc>().add(DisconnectRequested());
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Load Balancing Configuration')),
+      appBar: AppBar(
+        title: const Text('Load Balancing Configuration'),
+      ),
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
         listener: (context, state) {
           if (state.status == DataStatus.success) {
@@ -1307,9 +1159,9 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                     ],
                     selected: {state.type},
                     onSelectionChanged: (Set<LoadBalancingType> newSelection) {
-                      context.read<LoadBalancingBloc>().add(
-                        LoadBalancingTypeSelected(newSelection.first),
-                      );
+                      context
+                          .read<LoadBalancingBloc>()
+                          .add(LoadBalancingTypeSelected(newSelection.first));
                     },
                   );
                 },
@@ -1357,7 +1209,8 @@ class _RouterInfoSection extends StatelessWidget {
     );
   }
 
-  Widget _buildInterfacesInfo(BuildContext context, LoadBalancingState state) {
+  Widget _buildInterfacesInfo(
+      BuildContext context, LoadBalancingState state) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16.0),
       child: Column(
@@ -1365,10 +1218,8 @@ class _RouterInfoSection extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Text(
-              'Device Interfaces',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            child: Text('Device Interfaces',
+                style: Theme.of(context).textTheme.titleMedium),
           ),
           const SizedBox(height: 8),
           if (state.interfacesStatus == DataStatus.loading)
@@ -1376,10 +1227,8 @@ class _RouterInfoSection extends StatelessWidget {
           else if (state.interfacesStatus == DataStatus.failure)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Text(
-                'Error fetching interfaces: ${state.error}',
-                style: const TextStyle(color: Colors.red),
-              ),
+              child: Text('Error fetching interfaces: ${state.error}',
+                  style: const TextStyle(color: Colors.red)),
             )
           else if (state.interfaces.isEmpty)
             const Padding(
@@ -1396,24 +1245,19 @@ class _RouterInfoSection extends StatelessWidget {
                   DataColumn(label: Text('Status')),
                 ],
                 rows: state.interfaces
-                    .map(
-                      (iface) => DataRow(
-                        cells: [
-                          DataCell(Text(iface.name)),
-                          DataCell(Text(iface.ipAddress)),
-                          DataCell(
-                            Text(
+                    .map((iface) => DataRow(
+                          cells: [
+                            DataCell(Text(iface.name)),
+                            DataCell(Text(iface.ipAddress)),
+                            DataCell(Text(
                               iface.status,
                               style: TextStyle(
-                                color: iface.status == 'up'
-                                    ? Colors.green
-                                    : Colors.orange,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
+                                  color: iface.status == 'up'
+                                      ? Colors.green
+                                      : Colors.orange),
+                            )),
+                          ],
+                        ))
                     .toList(),
               ),
             ),
@@ -1423,9 +1267,7 @@ class _RouterInfoSection extends StatelessWidget {
   }
 
   Widget _buildRoutingTableInfo(
-    BuildContext context,
-    LoadBalancingState state,
-  ) {
+      BuildContext context, LoadBalancingState state) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -1434,28 +1276,26 @@ class _RouterInfoSection extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'IP Routing Table',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+              Text('IP Routing Table',
+                  style: Theme.of(context).textTheme.titleMedium),
               if (state.routingTableStatus != DataStatus.loading)
                 IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Refresh Routing Table',
-                  onPressed: state.sshClient == null
+                  // FIX: The button is enabled as long as we have credentials.
+                  onPressed: state.credentials == null
                       ? null
                       : () {
-                          context.read<LoadBalancingBloc>().add(
-                            FetchRoutingTableRequested(),
-                          );
+                          context
+                              .read<LoadBalancingBloc>()
+                              .add(FetchRoutingTableRequested());
                         },
                 )
               else
                 const SizedBox(
-                  height: 24,
-                  width: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
             ],
           ),
           const SizedBox(height: 8),

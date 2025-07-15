@@ -5,15 +5,21 @@ import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
+import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
+import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+import 'package:ctelnet/ctelnet.dart';
 import 'remote_datasource.dart';
 
 class RemoteDataSourceImpl implements RemoteDataSource {
-  static const _commandTimeout = Duration(seconds: 15);
+  static const _commandTimeout = Duration(seconds: 20);
 
-  /// Helper to establish a new SSH client connection for each request.
+  // =======================================================================
+  // SSH Implementation (Stable)
+  // =======================================================================
+
   Future<SSHClient> _createSshClient(DeviceCredentials credentials) async {
     try {
       final socket = await SSHSocket.connect(credentials.ip, 22,
@@ -35,117 +41,209 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     }
   }
 
+  // =======================================================================
+  // Telnet Implementation (Definitive Fix)
+  // =======================================================================
+
+  /// Executes a sequence of commands over Telnet using a robust state machine.
+  Future<String> _executeTelnetCommands(
+      DeviceCredentials credentials, List<String> commands) async {
+    final completer = Completer<String>();
+    final outputBuffer = StringBuffer();
+    CTelnetClient? client;
+    StreamSubscription<Message>? subscription;
+
+    var state = 'login';
+    int commandIndex = 0;
+    final allCommands = ['terminal length 0', ...commands];
+
+    client = CTelnetClient(
+      host: credentials.ip,
+      port: 23,
+      timeout: const Duration(seconds: 15),
+      onConnect: () => debugPrint('[TELNET] Connected.'),
+      onDisconnect: () {
+        debugPrint('[TELNET] Disconnected.');
+        if (!completer.isCompleted) {
+          completer.complete(outputBuffer.toString());
+        }
+        subscription?.cancel();
+      },
+      onError: (error) {
+        if (!completer.isCompleted) {
+          completer.completeError(ServerFailure("Telnet Error: $error"));
+        }
+        subscription?.cancel();
+      },
+    );
+
+    try {
+      subscription = (await client.connect())?.listen((data) {
+        final receivedText = data.text.trim();
+        outputBuffer.write(data.text);
+        debugPrint("<< TELNET RECV: ${receivedText.replaceAll('\r\n', ' ')}");
+
+        void executeNextCommand() {
+          if (commandIndex < allCommands.length) {
+            final cmd = allCommands[commandIndex];
+            debugPrint(">> TELNET SEND: $cmd");
+            client?.send('$cmd\n');
+            commandIndex++;
+          } else {
+            // All commands have been sent. The next prompt means we're done.
+            if (!completer.isCompleted) {
+              client?.disconnect();
+            }
+          }
+        }
+
+        // State machine for login and command execution
+        switch (state) {
+          case 'login':
+            if (receivedText.toLowerCase().contains('username')) {
+              client?.send('${credentials.username}\n');
+            } else if (receivedText.toLowerCase().contains('password')) {
+              client?.send('${credentials.password}\n');
+            } else if (receivedText.endsWith('>')) {
+              state = 'enable';
+              client?.send('enable\n');
+            } else if (receivedText.endsWith('#')) {
+              state = 'executing';
+              outputBuffer.clear(); // Clear login junk from buffer
+              executeNextCommand();
+            }
+            break;
+          case 'enable':
+            if (receivedText.toLowerCase().contains('password')) {
+              client?.send('${credentials.enablePassword ?? ''}\n');
+            } else if (receivedText.endsWith('#')) {
+              state = 'executing';
+              outputBuffer.clear(); // Clear login junk from buffer
+              executeNextCommand();
+            }
+            break;
+          case 'executing':
+            // We are in command execution mode. Every prompt triggers the next command.
+            if (receivedText.endsWith('#')) {
+              executeNextCommand();
+            }
+            break;
+        }
+      });
+    } catch (e) {
+      if (!completer.isCompleted) {
+        completer.completeError(ServerFailure("Telnet Connection Failed: $e"));
+      }
+    }
+
+    return completer.future.timeout(_commandTimeout, onTimeout: () {
+      client?.disconnect();
+      throw const ServerFailure("Telnet operation timed out.");
+    });
+  }
+
+  // =======================================================================
+  // Public API Methods (Switching between SSH and Telnet)
+  // =======================================================================
+
   @override
   Future<List<RouterInterface>> fetchInterfaces(
       DeviceCredentials credentials) async {
-    SSHClient? client;
-    try {
-      client = await _createSshClient(credentials);
-      final result =
-          await client.run('show ip interface brief').timeout(_commandTimeout);
-      final decodedResult = utf8.decode(result);
-      final lines = decodedResult.split('\n');
-      final interfaces = <RouterInterface>[];
-      final regex = RegExp(
-          r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
-
-      for (final line in lines) {
-        final match = regex.firstMatch(line);
-        if (match != null) {
-          interfaces.add(RouterInterface(
-            name: match.group(1)!,
-            ipAddress: match.group(2)!,
-            status: match.group(3)!,
-          ));
-        }
+    String result;
+    if (credentials.type == ConnectionType.ssh) {
+      SSHClient? client;
+      try {
+        client = await _createSshClient(credentials);
+        final rawResult =
+            await client.run('show ip interface brief').timeout(_commandTimeout);
+        result = utf8.decode(rawResult);
+      } finally {
+        client?.close();
       }
-      return interfaces;
-    } finally {
-      client?.close();
+    } else {
+      result =
+          await _executeTelnetCommands(credentials, ['show ip interface brief']);
     }
+
+    final lines = result.split('\n');
+    final interfaces = <RouterInterface>[];
+    final regex = RegExp(
+        r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
+
+    for (final line in lines) {
+      final match = regex.firstMatch(line);
+      if (match != null) {
+        interfaces.add(RouterInterface(
+          name: match.group(1)!,
+          ipAddress: match.group(2)!,
+          status: match.group(3)!,
+        ));
+      }
+    }
+    return interfaces;
   }
 
   @override
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
-    SSHClient? client;
-    try {
-      client = await _createSshClient(credentials);
-      // Use the reliable interactive shell method for this multi-step command.
-      final shell = await client.shell(
-        pty: SSHPtyConfig(type: 'xterm', width: 120, height: 80),
-      );
+    String rawResult;
 
-      final completer = Completer<String>();
-      final buffer = StringBuffer();
-      late StreamSubscription subscription;
-      const prompt = '#';
-      int promptCount = 0;
-
-      subscription = shell.stdout.listen(
-        (data) {
-          final decodedString = utf8.decode(data, allowMalformed: true);
-          buffer.write(decodedString);
-          if (decodedString.trim().endsWith(prompt)) {
-            promptCount++;
-            if (promptCount == 1) {
-              shell.stdin.add(utf8.encode('terminal length 0\n'));
-            } else if (promptCount == 2) {
-              shell.stdin.add(utf8.encode('show ip route\n'));
-            } else if (promptCount == 3) {
-              if (!completer.isCompleted) {
-                subscription.cancel();
-                final fullOutput = buffer.toString();
-                final startOfOutput = fullOutput.indexOf('show ip route\r\n');
-                final endOfOutput = fullOutput.lastIndexOf(prompt);
-                if (startOfOutput != -1 && endOfOutput > startOfOutput) {
-                  final commandAndNewlineLength = 'show ip route\r\n'.length;
-                  final relevantOutput = fullOutput.substring(
-                      startOfOutput + commandAndNewlineLength, endOfOutput);
-                  completer.complete(relevantOutput.trim());
-                } else {
-                  completer.complete(fullOutput.trim());
-                }
-              }
-            }
-          }
-        },
-        onError: (error) =>
-            !completer.isCompleted ? completer.completeError(error) : null,
-        onDone: () => !completer.isCompleted
-            ? completer.complete(buffer.toString().trim())
-            : null,
-      );
-
-      return await completer.future.timeout(_commandTimeout);
-    } finally {
-      client?.close();
+    if (credentials.type == ConnectionType.ssh) {
+      SSHClient? client;
+      try {
+        client = await _createSshClient(credentials);
+        final sshRawResult = await client
+            .run('terminal length 0\nshow ip route')
+            .timeout(_commandTimeout);
+        rawResult = utf8.decode(sshRawResult);
+      } finally {
+        client?.close();
+      }
+    } else {
+      rawResult = await _executeTelnetCommands(credentials, ['show ip route']);
     }
+
+    // Clean up the output to remove commands and prompts
+    final startOfOutput = rawResult.indexOf('show ip route');
+    final endOfOutput = rawResult.lastIndexOf(RegExp(r'\S+[>#]'));
+    if (startOfOutput != -1 && endOfOutput > startOfOutput) {
+      return rawResult
+          .substring(startOfOutput + 'show ip route'.length, endOfOutput)
+          .trim();
+    }
+    return rawResult;
   }
 
   @override
   Future<String> pingGateway(
       DeviceCredentials credentials, String ipAddress) async {
-    SSHClient? client;
-    try {
-      client = await _createSshClient(credentials);
-      final result =
-          await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
-      final decodedResult = utf8.decode(result);
-      if (decodedResult.contains('!!!')) {
-        return 'Success! Gateway is reachable.';
-      } else if (decodedResult.contains('...')) {
-        return 'Timeout. Gateway is not reachable.';
-      } else {
-        return 'Ping failed. Check IP or connectivity.';
+    String result;
+    if (credentials.type == ConnectionType.ssh) {
+      SSHClient? client;
+      try {
+        client = await _createSshClient(credentials);
+        final rawSshResult =
+            await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
+        result = utf8.decode(rawSshResult);
+      } finally {
+        client?.close();
       }
-    } finally {
-      client?.close();
+    } else {
+      result =
+          await _executeTelnetCommands(credentials, ['ping $ipAddress repeat 2']);
+    }
+
+    if (result.contains('!!!')) {
+      return 'Success! Gateway is reachable.';
+    } else if (result.contains('...')) {
+      return 'Timeout. Gateway is not reachable.';
+    } else {
+      return 'Ping failed. Check IP or connectivity.';
     }
   }
 
   @override
   Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
-    // REST API is stateless and doesn't need the same connection management.
+    // This method remains unchanged
     final dio = Dio();
     final String basicAuth =
         'Basic ${base64Encode(utf8.encode('${credentials.username}:${credentials.password}'))}';

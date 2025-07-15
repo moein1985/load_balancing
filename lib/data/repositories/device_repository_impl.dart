@@ -13,25 +13,30 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<void> checkCredentials(DeviceCredentials credentials) async {
-    // This method now handles the connection logic based on the type.
-    if (credentials.type == ConnectionType.ssh) {
-      // Create a temporary client just to check credentials, then close it.
+    // FIX: Handle Telnet connections in the same way as SSH for credential checks.
+    // For both SSH and Telnet, we can verify credentials by attempting to fetch interfaces.
+    // If it succeeds, the credentials are valid.
+    if (credentials.type == ConnectionType.ssh || credentials.type == ConnectionType.telnet) {
       try {
+        // This call will be routed to the correct SSH or Telnet implementation
+        // inside the remoteDataSource.
         await remoteDataSource.fetchInterfaces(credentials);
       } on ServerFailure catch (e) {
+        // Re-throw the specific failure message from the data source.
         throw ServerFailure(e.message);
       } catch (e) {
+        // Catch any other unexpected errors.
         throw ServerFailure(e.toString());
       }
     } else if (credentials.type == ConnectionType.restApi) {
+      // REST API has its own separate check.
       return await remoteDataSource.checkRestApiCredentials(credentials);
-    } else {
-      throw const ServerFailure('Telnet is not implemented.');
     }
   }
 
   @override
-  Future<List<RouterInterface>> getInterfaces(DeviceCredentials credentials) async {
+  Future<List<RouterInterface>> getInterfaces(
+      DeviceCredentials credentials) async {
     try {
       return await remoteDataSource.fetchInterfaces(credentials);
     } on ServerFailure catch (e) {
@@ -42,7 +47,9 @@ class DeviceRepositoryImpl implements DeviceRepository {
   }
 
   @override
-  Future<String> pingGateway({required DeviceCredentials credentials, required String ipAddress}) async {
+  Future<String> pingGateway(
+      {required DeviceCredentials credentials,
+      required String ipAddress}) async {
     try {
       return await remoteDataSource.pingGateway(credentials, ipAddress);
     } on ServerFailure catch (e) {
