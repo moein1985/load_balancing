@@ -24,11 +24,19 @@ class LoadBalancingTypeSelected extends LoadBalancingEvent {
 }
 
 class FetchInterfacesRequested extends LoadBalancingEvent {}
+
 class FetchRoutingTableRequested extends LoadBalancingEvent {}
 
 class PingGatewayRequested extends LoadBalancingEvent {
   final String ipAddress;
   const PingGatewayRequested(this.ipAddress);
+  @override
+  List<Object?> get props => [ipAddress];
+}
+
+class ClearPingResult extends LoadBalancingEvent {
+  final String ipAddress;
+  const ClearPingResult(this.ipAddress);
   @override
   List<Object?> get props => [ipAddress];
 }
@@ -39,4 +47,12 @@ class ApplyEcmpConfig extends LoadBalancingEvent {
   const ApplyEcmpConfig({required this.gateway1, required this.gateway2});
   @override
   List<Object> get props => [gateway1, gateway2];
+}
+
+class ApplyPbrConfig extends LoadBalancingEvent {
+  final String sourceNetwork;
+  final String gateway;
+  const ApplyPbrConfig({required this.sourceNetwork, required this.gateway});
+  @override
+  List<Object> get props => [sourceNetwork, gateway];
 }

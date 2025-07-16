@@ -17,6 +17,9 @@ class _EcmpFormState extends State<EcmpForm> {
   final _gateway1Controller = TextEditingController();
   final _gateway2Controller = TextEditingController();
 
+  // IP validation regex
+  static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
+
   @override
   void dispose() {
     _gateway1Controller.dispose();
@@ -24,12 +27,23 @@ class _EcmpFormState extends State<EcmpForm> {
     super.dispose();
   }
 
+  bool _isValidIp(String ip) {
+    if (!_ipRegex.hasMatch(ip)) return false;
+    
+    final parts = ip.split('.');
+    for (final part in parts) {
+      final num = int.tryParse(part);
+      if (num == null || num < 0 || num > 255) return false;
+    }
+    return true;
+  }
+
   void _applyEcmpConfig() {
     if (_formKey.currentState!.validate()) {
       context.read<LoadBalancingBloc>().add(
             ApplyEcmpConfig(
-              gateway1: _gateway1Controller.text,
-              gateway2: _gateway2Controller.text,
+              gateway1: _gateway1Controller.text.trim(),
+              gateway2: _gateway2Controller.text.trim(),
             ),
           );
     }
@@ -38,6 +52,7 @@ class _EcmpFormState extends State<EcmpForm> {
   @override
   Widget build(BuildContext context) {
     return Card(
+      clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Form(
@@ -46,27 +61,50 @@ class _EcmpFormState extends State<EcmpForm> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'ECMP Configuration',
+                'تنظیمات ECMP',
                 style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                  'Enter the gateway IPs for your two internet connections. Traffic will be distributed equally.'),
-              const SizedBox(height: 24),
-              // Use the new dedicated widget for the input field
-              _GatewayInputField(
-                controller: _gateway1Controller,
-                labelText: 'Gateway IP 1',
-                hintText: 'e.g., 203.0.113.1',
+                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
-              // Use the new dedicated widget for the input field
+              Text(
+                'آدرس IP گیت‌وی‌های اینترنت خود را وارد کنید. ترافیک به طور مساوی بین دو گیت‌وی توزیع خواهد شد.',
+                style: Theme.of(context).textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              _GatewayInputField(
+                controller: _gateway1Controller,
+                label: 'گیت‌وی ۱',
+                hint: '192.168.1.1',
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'آدرس IP گیت‌وی ۱ الزامی است';
+                  }
+                  if (!_isValidIp(value.trim())) {
+                    return 'فرمت آدرس IP نامعتبر است';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
               _GatewayInputField(
                 controller: _gateway2Controller,
-                labelText: 'Gateway IP 2',
-                hintText: 'e.g., 198.51.100.1',
+                label: 'گیت‌وی ۲',
+                hint: '192.168.2.1',
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'آدرس IP گیت‌وی ۲ الزامی است';
+                  }
+                  if (!_isValidIp(value.trim())) {
+                    return 'فرمت آدرس IP نامعتبر است';
+                  }
+                  if (value.trim() == _gateway1Controller.text.trim()) {
+                    return 'گیت‌وی ۲ نمی‌تواند مشابه گیت‌وی ۱ باشد';
+                  }
+                  return null;
+                },
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 24),
               BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
                 builder: (context, state) {
                   if (state.status == DataStatus.loading) {
@@ -74,11 +112,8 @@ class _EcmpFormState extends State<EcmpForm> {
                   }
                   return ElevatedButton.icon(
                     onPressed: _applyEcmpConfig,
-                    icon: const Icon(Icons.check_circle_outline),
-                    label: const Text('Apply Configuration'),
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
+                    icon: const Icon(Icons.settings),
+                    label: const Text('اعمال تنظیمات'),
                   );
                 },
               ),
@@ -90,71 +125,136 @@ class _EcmpFormState extends State<EcmpForm> {
   }
 }
 
-/// A dedicated, stateless widget for the gateway input field.
-/// This improves reliability by isolating the build logic.
+// بهبود _GatewayInputField برای جلوگیری از ping با IP خالی
 class _GatewayInputField extends StatelessWidget {
   final TextEditingController controller;
-  final String labelText;
-  final String hintText;
+  final String label;
+  final String hint;
+  final String? Function(String?)? validator;
 
   const _GatewayInputField({
     required this.controller,
-    required this.labelText,
-    required this.hintText,
+    required this.label,
+    required this.hint,
+    this.validator,
   });
+
+  // IP validation regex
+  static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
+
+  bool _isValidIp(String ip) {
+    if (ip.trim().isEmpty) return false;
+    if (!_ipRegex.hasMatch(ip.trim())) return false;
+    
+    final parts = ip.trim().split('.');
+    for (final part in parts) {
+      final num = int.tryParse(part);
+      if (num == null || num < 0 || num > 255) return false;
+    }
+    return true;
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Use a BlocBuilder to react to state changes for this specific field.
     return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
       builder: (context, state) {
-        final ip = controller.text;
-        final isPinging =
-            state.pingStatus == DataStatus.loading && state.pingingIp == ip;
-        final pingResult = state.pingResults[ip];
+        final ipAddress = controller.text.trim();
+        final pingResult = state.pingResults[ipAddress];
+        final isPinging = state.pingingIp == ipAddress;
+        final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
 
-        return TextFormField(
-          controller: controller,
-          // Use a ValueListenableBuilder to enable/disable the button
-          // based on whether the text field is empty or not. This is more efficient.
-          decoration: InputDecoration(
-            labelText: labelText,
-            hintText: hintText,
-            suffixIcon: isPinging
-                ? const Padding(
-                    padding: EdgeInsets.all(12.0),
-                    child: SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2.5)),
-                  )
-                : ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: controller,
-                    builder: (context, value, child) {
-                      return IconButton(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextFormField(
+              controller: controller,
+              validator: validator,
+              decoration: InputDecoration(
+                labelText: label,
+                hintText: hint,
+                border: const OutlineInputBorder(),
+                suffixIcon: isPinging
+                    ? const Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : IconButton(
                         icon: const Icon(Icons.network_ping),
-                        tooltip: 'Test Gateway Reachability',
-                        onPressed: value.text.isNotEmpty
+                        tooltip: canPing ? 'تست اتصال' : 'IP معتبر وارد کنید',
+                        onPressed: canPing
                             ? () {
-                                debugPrint('--- PING BUTTON PRESSED for IP: $ip ---');
+                                debugPrint('--- PING BUTTON PRESSED for IP: ${controller.text.trim()} ---');
                                 context
                                     .read<LoadBalancingBloc>()
-                                    .add(PingGatewayRequested(ip));
+                                    .add(PingGatewayRequested(controller.text.trim()));
                               }
                             : null,
-                      );
-                    },
-                  ),
-            helperText: pingResult,
-            helperStyle: TextStyle(
-              color: pingResult != null && pingResult.contains('Success')
-                  ? Colors.green
-                  : Colors.orange,
+                      ),
+              ),
+              onChanged: (value) {
+                // برای به‌روزرسانی حالت دکمه ping
+                if (context.mounted) {
+                  // Trigger rebuild without dispatching unnecessary events
+                  (context as Element).markNeedsBuild();
+                }
+              },
             ),
-          ),
-          keyboardType: TextInputType.number,
-          validator: (value) =>
-              value == null || value.isEmpty ? 'Please enter a Gateway IP' : null,
+            if (pingResult != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: pingResult.contains('موفق') 
+                      ? Colors.green.withAlpha((.1*255).round())
+                      : Colors.orange.withAlpha((.1*255).round()),
+                  border: Border.all(
+                    color: pingResult.contains('موفق') 
+                        ? Colors.green 
+                        : Colors.orange,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      pingResult.contains('موفق') 
+                          ? Icons.check_circle 
+                          : Icons.warning,
+                      size: 16,
+                      color: pingResult.contains('موفق') 
+                          ? Colors.green 
+                          : Colors.orange,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        pingResult,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: pingResult.contains('موفق') 
+                              ? Colors.green.shade700 
+                              : Colors.orange.shade700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () {
+                        context
+                            .read<LoadBalancingBloc>()
+                            .add(ClearPingResult(ipAddress));
+                      },
+                      tooltip: 'پاک کردن نتیجه',
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         );
       },
     );

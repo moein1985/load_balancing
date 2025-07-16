@@ -1,355 +1,219 @@
 // lib/data/datasources/remote_datasource_impl.dart
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'package:dartssh2/dartssh2.dart';
-import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
-import 'package:ctelnet/ctelnet.dart';
+import 'package:load_balance/data/datasources/ssh_client_handler.dart';
+import 'package:load_balance/data/datasources/telnet_client_handler.dart';
+import 'package:load_balance/data/datasources/restapi_client_handler.dart';
 import 'remote_datasource.dart';
 
 class RemoteDataSourceImpl implements RemoteDataSource {
-  static const _commandTimeout = Duration(seconds: 20);
+  final SshClientHandler _sshHandler = SshClientHandler();
+  final TelnetClientHandler _telnetHandler = TelnetClientHandler();
+  final RestApiClientHandler _restApiHandler = RestApiClientHandler();
 
-  // =======================================================================
-  // SSH Implementation (Stable)
-  // =======================================================================
-
-  Future<SSHClient> _createSshClient(DeviceCredentials credentials) async {
-    try {
-      final socket = await SSHSocket.connect(credentials.ip, 22,
-          timeout: const Duration(seconds: 10));
-      return SSHClient(
-        socket,
-        username: credentials.username,
-        onPasswordRequest: () => credentials.password,
-      );
-    } on TimeoutException {
-      throw const ServerFailure('Connection timed out.');
-    } on SocketException {
-      throw const ServerFailure('Could not connect to host.');
-    } catch (e) {
-      if (e.toString().toLowerCase().contains('auth')) {
-        throw const ServerFailure('Authentication failed.');
-      }
-      throw ServerFailure('SSH Error: ${e.toString()}');
+  void _logDebug(String message) {
+    if (kDebugMode) {
+      debugPrint('[REMOTE_DS] $message');
     }
   }
-
-  // =======================================================================
-  // Telnet Implementation
-  // =======================================================================
-
-  Future<String> _executeTelnetCommands(
-      DeviceCredentials credentials, List<String> commands) async {
-    final completer = Completer<String>();
-    final outputBuffer = StringBuffer();
-    CTelnetClient? client;
-    StreamSubscription<Message>? subscription;
-
-    var state = 'login';
-    int commandIndex = 0;
-    final allCommands = ['terminal length 0', ...commands];
-
-    client = CTelnetClient(
-      host: credentials.ip,
-      port: 23,
-      timeout: const Duration(seconds: 15),
-      onConnect: () => debugPrint('[TELNET] Connected.'),
-      onDisconnect: () {
-        debugPrint('[TELNET] Disconnected.');
-        if (!completer.isCompleted) {
-          completer.complete(outputBuffer.toString());
-        }
-        subscription?.cancel();
-      },
-      onError: (error) {
-        if (!completer.isCompleted) {
-          completer.completeError(ServerFailure("Telnet Error: $error"));
-        }
-        subscription?.cancel();
-      },
-    );
-
-    try {
-      subscription = (await client.connect())?.listen((data) {
-        final receivedText = data.text.trim();
-        outputBuffer.write(data.text);
-        debugPrint("<< TELNET RECV: ${receivedText.replaceAll('\r\n', ' ')}");
-
-        void executeNextCommand() {
-          if (commandIndex < allCommands.length) {
-            final cmd = allCommands[commandIndex];
-            debugPrint(">> TELNET SEND: $cmd");
-            client?.send('$cmd\n');
-            commandIndex++;
-          } else {
-            if (!completer.isCompleted) {
-              client?.disconnect();
-            }
-          }
-        }
-
-        switch (state) {
-          case 'login':
-            if (receivedText.toLowerCase().contains('username')) {
-              client?.send('${credentials.username}\n');
-            } else if (receivedText.toLowerCase().contains('password')) {
-              client?.send('${credentials.password}\n');
-            } else if (receivedText.endsWith('>')) {
-              state = 'enable';
-              client?.send('enable\n');
-            } else if (receivedText.endsWith('#')) {
-              state = 'executing';
-              outputBuffer.clear();
-              executeNextCommand();
-            }
-            break;
-          case 'enable':
-            if (receivedText.toLowerCase().contains('password')) {
-              client?.send('${credentials.enablePassword ?? ''}\n');
-            } else if (receivedText.endsWith('#')) {
-              state = 'executing';
-              outputBuffer.clear();
-              executeNextCommand();
-            }
-            break;
-          case 'executing':
-            if (receivedText.endsWith('#')) {
-              if (commandIndex < allCommands.length) {
-                executeNextCommand();
-              } else {
-                if (!completer.isCompleted) {
-                  client?.disconnect();
-                }
-              }
-            }
-            break;
-        }
-      });
-    } catch (e) {
-      if (!completer.isCompleted) {
-        completer.completeError(ServerFailure("Telnet Connection Failed: $e"));
-      }
-    }
-
-    return completer.future.timeout(_commandTimeout, onTimeout: () {
-      client?.disconnect();
-      throw const ServerFailure("Telnet operation timed out.");
-    });
-  }
-
-  Future<String> _executeTelnetPing(
-      DeviceCredentials credentials, String ipAddress) async {
-    final completer = Completer<String>();
-    CTelnetClient? client;
-    StreamSubscription<Message>? subscription;
-    var state = 'login';
-
-    client = CTelnetClient(
-      host: credentials.ip,
-      port: 23,
-      timeout: const Duration(seconds: 15),
-      onConnect: () => debugPrint('[PING] Connected.'),
-      onDisconnect: () {
-        debugPrint('[PING] Disconnected.');
-        if (!completer.isCompleted) {
-          completer.complete('Ping failed. Check IP or connectivity.');
-        }
-        subscription?.cancel();
-      },
-      onError: (error) => !completer.isCompleted ? completer.completeError(error) : null,
-    );
-
-    try {
-      subscription = (await client.connect())?.listen((data) {
-        final receivedText = data.text;
-        debugPrint("<< PING RECV: ${receivedText.replaceAll('\r\n', ' ')}");
-
-        // FINAL FIX: Look for the correct success patterns.
-        if (receivedText.contains('!!') || receivedText.contains('Success rate is 100')) {
-          if (!completer.isCompleted) {
-            completer.complete('Success! Gateway is reachable.');
-            client?.disconnect();
-          }
-        } else if (receivedText.contains('...')) {
-           if (!completer.isCompleted) {
-            completer.complete('Timeout. Gateway is not reachable.');
-            client?.disconnect();
-          }
-        }
-
-        final trimmedText = receivedText.trim();
-        if (state == 'login') {
-          if (trimmedText.toLowerCase().contains('username')) {
-            client?.send('${credentials.username}\n');
-          } else if (trimmedText.toLowerCase().contains('password')) {
-            client?.send('${credentials.password}\n');
-          } else if (trimmedText.endsWith('>')) {
-            state = 'enable';
-            client?.send('enable\n');
-          } else if (trimmedText.endsWith('#')) {
-            state = 'executing';
-            client?.send('ping $ipAddress repeat 2\n');
-          }
-        } else if (state == 'enable') {
-           if (trimmedText.toLowerCase().contains('password')) {
-            client?.send('${credentials.enablePassword ?? ''}\n');
-          } else if (trimmedText.endsWith('#')) {
-            state = 'executing';
-            client?.send('ping $ipAddress repeat 2\n');
-          }
-        }
-      });
-    } catch (e) {
-       if (!completer.isCompleted) {
-          completer.completeError(ServerFailure("Ping Connection Failed: $e"));
-       }
-    }
-
-    return completer.future.timeout(_commandTimeout, onTimeout: () {
-      client?.disconnect();
-      return 'Timeout. Gateway is not reachable.';
-    });
-  }
-
-  // =======================================================================
-  // Public API Methods
-  // =======================================================================
 
   @override
   Future<List<RouterInterface>> fetchInterfaces(
       DeviceCredentials credentials) async {
-    String result;
+    _logDebug('دریافت لیست Interface ها - ${credentials.type}');
+    
+    String briefResult;
+    String detailedResult;
+    
     if (credentials.type == ConnectionType.ssh) {
-      SSHClient? client;
-      try {
-        client = await _createSshClient(credentials);
-        final rawResult =
-            await client.run('show ip interface brief').timeout(_commandTimeout);
-        result = utf8.decode(rawResult);
-      } finally {
-        client?.close();
-      }
+      briefResult = await _sshHandler.fetchInterfaces(credentials);
+      detailedResult = await _sshHandler.fetchDetailedInterfaces(credentials);
     } else {
-      result =
-          await _executeTelnetCommands(credentials, ['show ip interface brief']);
+      briefResult = await _telnetHandler.fetchInterfaces(credentials);
+      detailedResult = await _telnetHandler.fetchDetailedInterfaces(credentials);
     }
 
-    final lines = result.split('\n');
-    final interfaces = <RouterInterface>[];
-    final regex = RegExp(
-        r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
+    return _parseDetailedInterfaces(briefResult, detailedResult);
+  }
 
-    for (final line in lines) {
-      final match = regex.firstMatch(line);
-      if (match != null) {
+  List<RouterInterface> _parseDetailedInterfaces(String briefResult, String detailedResult) {
+    final interfaces = <RouterInterface>[];
+    final briefLines = briefResult.split('\n');
+    final briefRegex = RegExp(
+        r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)');
+
+    // ابتدا اینترفیس‌های اصلی را از brief پیدا کنیم
+    final mainInterfaces = <Map<String, String>>[];
+    for (final line in briefLines) {
+      final match = briefRegex.firstMatch(line);
+      if (match != null && match.group(2) != 'unassigned') {
+        final interfaceName = match.group(1)!;
+        // NVI0 را نادیده بگیر چون مجازی است
+        if (!interfaceName.startsWith('NVI')) {
+          mainInterfaces.add({
+            'name': interfaceName,
+            'primaryIp': match.group(2)!,
+            'status': match.group(3)!,
+          });
+        }
+      }
+    }
+
+    // سپس آدرس‌های ثانویه را از detailed config پیدا کنیم
+    final secondaryIps = _extractSecondaryIps(detailedResult);
+
+    // اینترفیس‌ها را بسازیم
+    for (final interface in mainInterfaces) {
+      final interfaceName = interface['name']!;
+      final primaryIp = interface['primaryIp']!;
+      final status = interface['status']!;
+      
+      // آدرس اصلی را اضافه کن
+      interfaces.add(RouterInterface(
+        name: interfaceName,
+        ipAddress: primaryIp,
+        status: status,
+      ));
+      
+      // آدرس‌های ثانویه را اضافه کن
+      final secondaries = secondaryIps[interfaceName] ?? [];
+      for (final secondaryIp in secondaries) {
         interfaces.add(RouterInterface(
-          name: match.group(1)!,
-          ipAddress: match.group(2)!,
-          status: match.group(3)!,
+          name: '$interfaceName (Secondary)',
+          ipAddress: secondaryIp,
+          status: status,
         ));
       }
     }
+    
+    _logDebug('${interfaces.length} Interface پردازش شد');
     return interfaces;
+  }
+
+  Map<String, List<String>> _extractSecondaryIps(String configOutput) {
+    final secondaryIps = <String, List<String>>{};
+    final lines = configOutput.split('\n');
+    String? currentInterface;
+    
+    for (final line in lines) {
+      final trimmedLine = line.trim();
+      
+      // پیدا کردن شروع تنظیمات اینترفیس
+      if (trimmedLine.startsWith('interface ')) {
+        currentInterface = trimmedLine.split(' ')[1];
+        secondaryIps[currentInterface] = [];
+      }
+      
+      // پیدا کردن آدرس‌های IP ثانویه
+      if (currentInterface != null && trimmedLine.contains('ip address') && trimmedLine.contains('secondary')) {
+        final parts = trimmedLine.split(' ');
+        if (parts.length >= 4) {
+          final ipAddress = parts[2];
+          if (_isValidIpAddress(ipAddress)) {
+            secondaryIps[currentInterface]!.add(ipAddress);
+          }
+        }
+      }
+    }
+    
+    return secondaryIps;
   }
 
   @override
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
+    _logDebug('دریافت جدول مسیریابی - ${credentials.type}');
+
     String rawResult;
-
+    
     if (credentials.type == ConnectionType.ssh) {
-      SSHClient? client;
-      try {
-        client = await _createSshClient(credentials);
-        final sshRawResult = await client
-            .run('terminal length 0\nshow ip route')
-            .timeout(_commandTimeout);
-        rawResult = utf8.decode(sshRawResult);
-      } finally {
-        client?.close();
-      }
+      rawResult = await _sshHandler.getRoutingTable(credentials);
     } else {
-      rawResult = await _executeTelnetCommands(credentials, ['show ip route']);
+      rawResult = await _telnetHandler.getRoutingTable(credentials);
     }
 
-    final startOfOutput = rawResult.indexOf('show ip route');
-    final endOfOutput = rawResult.lastIndexOf(RegExp(r'\S+[>#]'));
-    if (startOfOutput != -1 && endOfOutput > startOfOutput) {
-      return rawResult
-          .substring(startOfOutput + 'show ip route'.length, endOfOutput)
-          .trim();
+    return _cleanRoutingTableOutput(rawResult);
+  }
+
+  String _cleanRoutingTableOutput(String rawResult) {
+    _logDebug('تمیز کردن خروجی جدول مسیریابی، طول ورودی: ${rawResult.length}');
+
+    final lines = rawResult.split('\n');
+    final cleanLines = <String>[];
+    bool routeStarted = false;
+
+    for (final line in lines) {
+      final trimmedLine = line.trim();
+      
+      // شروع جدول مسیریابی
+      if (trimmedLine.startsWith('Codes:') ||
+          trimmedLine.startsWith('Gateway of last resort')) {
+        routeStarted = true;
+      }
+
+      // پایان جدول مسیریابی
+      if (routeStarted && (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
+        break;
+      }
+
+      if (routeStarted && trimmedLine.isNotEmpty) {
+        cleanLines.add(line);
+      }
     }
-    return rawResult;
+
+    final result = cleanLines.join('\n').trim();
+    _logDebug('جدول مسیریابی تمیز شد، طول: ${result.length}');
+    return result;
   }
 
   @override
   Future<String> pingGateway(
       DeviceCredentials credentials, String ipAddress) async {
-    if (credentials.type == ConnectionType.ssh) {
-      SSHClient? client;
-      try {
-        client = await _createSshClient(credentials);
-        final rawSshResult =
-            await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
-        final result = utf8.decode(rawSshResult);
-        // FINAL FIX: Look for the correct success patterns for SSH as well.
-        if (result.contains('!!') || result.contains('Success rate is 100')) {
-          return 'Success! Gateway is reachable.';
-        }
-        if (result.contains('...')) {
-          return 'Timeout. Gateway is not reachable.';
-        }
-        return 'Ping failed. Check IP or connectivity.';
-      } finally {
-        client?.close();
-      }
-    } else {
-      return await _executeTelnetPing(credentials, ipAddress);
+    _logDebug('شروع ping برای IP: $ipAddress - ${credentials.type}');
+
+    if (ipAddress.trim().isEmpty) {
+      return 'خطا: آدرس IP نمی‌تواند خالی باشد.';
     }
+
+    if (!_isValidIpAddress(ipAddress.trim())) {
+      return 'خطا: فرمت آدرس IP نامعتبر است.';
+    }
+
+    final cleanIp = ipAddress.trim();
+
+    try {
+      if (credentials.type == ConnectionType.ssh) {
+        return await _sshHandler.pingGateway(credentials, cleanIp);
+      } else {
+        return await _telnetHandler.pingGateway(credentials, cleanIp);
+      }
+    } catch (e) {
+      _logDebug('خطا در ping: $e');
+      if (e is ServerFailure) {
+        return 'خطا: ${e.message}';
+      }
+      return 'خطا در ping: ${e.toString()}';
+    }
+  }
+
+  bool _isValidIpAddress(String ip) {
+    final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
+    if (!ipRegex.hasMatch(ip)) return false;
+
+    final parts = ip.split('.');
+    for (final part in parts) {
+      final num = int.tryParse(part);
+      if (num == null || num < 0 || num > 255) return false;
+    }
+    return true;
   }
 
   @override
   Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
-    final dio = Dio();
-    final String basicAuth =
-        'Basic ${base64Encode(utf8.encode('${credentials.username}:${credentials.password}'))}';
-    (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
-      final client = HttpClient();
-      client.badCertificateCallback =
-          (X509Certificate cert, String host, int port) => true;
-      return client;
-    };
-    try {
-      await dio.get(
-        'https://${credentials.ip}/restconf/data/Cisco-IOS-XE-native:native',
-        options: Options(
-          headers: {
-            'Authorization': basicAuth,
-            'Accept': 'application/yang-data+json'
-          },
-          receiveTimeout: const Duration(seconds: 10),
-        ),
-      );
-    } on DioException catch (e) {
-      if (e.response?.statusCode == 401) {
-        throw const ServerFailure(
-            'Authentication failed. Check username and password.');
-      } else if (e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.receiveTimeout) {
-        throw const ServerFailure(
-            'Connection timed out. Check IP and that RESTCONF is enabled.');
-      } else {
-        throw ServerFailure(
-            'RESTCONF error: ${e.message ?? 'Unknown Dio error'}');
-      }
-    } catch (e) {
-      throw ServerFailure('An unknown error occurred: ${e.toString()}');
-    }
+    _logDebug('بررسی اعتبار REST API');
+    return await _restApiHandler.checkCredentials(credentials);
   }
 }
