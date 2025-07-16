@@ -1,14 +1,15 @@
-// import 'dart:convert';
-// import 'package:dartssh2/dartssh2.dart';
+// import 'package:dart_ping/dart_ping.dart';
 
 // void main() async {
-//   final socket = await SSHSocket.connect('192.168.85.91', 22);
-//   final client = SSHClient(
-//     socket,
-//     username: 'cisco',
-//     onPasswordRequest: () => 'cisco',
-//   );
-//   final result = await client.run('show ip interface brief');
-//   print(utf8.decode(result));
-//   client.close();
+//   // Create ping object with desired args
+//   final ping = Ping('google.com', count: 5);
+
+//   // [Optional]
+//   // Preview command that will be run (helpful for debugging)
+//   print('Running command: ${ping.command}');
+
+//   // Begin ping process and listen for output
+//   ping.stream.listen((event) {
+//     print(event);
+//   });
 // }

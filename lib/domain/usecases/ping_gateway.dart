@@ -1,4 +1,4 @@
-// domain/usecases/ping_gateway.dart
+// lib/domain/usecases/ping_gateway.dart
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
 
@@ -7,6 +7,7 @@ class PingGateway {
 
   PingGateway(this.repository);
 
+  // The call method now requires credentials again.
   Future<String> call({
     required DeviceCredentials credentials,
     required String ipAddress,

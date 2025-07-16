@@ -1,4 +1,4 @@
-// presentation/screens/load_balancing/widgets/ecmp_form.dart
+// lib/presentation/screens/load_balancing/widgets/ecmp_form.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
@@ -53,15 +53,15 @@ class _EcmpFormState extends State<EcmpForm> {
               const Text(
                   'Enter the gateway IPs for your two internet connections. Traffic will be distributed equally.'),
               const SizedBox(height: 24),
-              _buildGatewayTextField(
-                context: context,
+              // Use the new dedicated widget for the input field
+              _GatewayInputField(
                 controller: _gateway1Controller,
                 labelText: 'Gateway IP 1',
                 hintText: 'e.g., 203.0.113.1',
               ),
               const SizedBox(height: 16),
-              _buildGatewayTextField(
-                context: context,
+              // Use the new dedicated widget for the input field
+              _GatewayInputField(
                 controller: _gateway2Controller,
                 labelText: 'Gateway IP 2',
                 hintText: 'e.g., 198.51.100.1',
@@ -88,55 +88,75 @@ class _EcmpFormState extends State<EcmpForm> {
       ),
     );
   }
+}
 
-  // Helper widget for gateway text fields with a Test button
-  Widget _buildGatewayTextField({
-    required BuildContext context,
-    required TextEditingController controller,
-    required String labelText,
-    required String hintText,
-  }) {
+/// A dedicated, stateless widget for the gateway input field.
+/// This improves reliability by isolating the build logic.
+class _GatewayInputField extends StatelessWidget {
+  final TextEditingController controller;
+  final String labelText;
+  final String hintText;
+
+  const _GatewayInputField({
+    required this.controller,
+    required this.labelText,
+    required this.hintText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Use a BlocBuilder to react to state changes for this specific field.
     return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
-        builder: (context, state) {
-      final ip = controller.text;
-      final isPinging = state.pingStatus == DataStatus.loading && state.pingingIp == ip;
-      final pingResult = state.pingResults[ip];
+      builder: (context, state) {
+        final ip = controller.text;
+        final isPinging =
+            state.pingStatus == DataStatus.loading && state.pingingIp == ip;
+        final pingResult = state.pingResults[ip];
 
-      return TextFormField(
-        controller: controller,
-        decoration: InputDecoration(
-          labelText: labelText,
-          hintText: hintText,
-          suffixIcon: isPinging
-              ? const Padding(
-                  padding: EdgeInsets.all(12.0),
-                  child: SizedBox(
-                    height: 12,
-                    width: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-                )
-              : IconButton(
-                  icon: const Icon(Icons.network_ping),
-                  tooltip: 'Test Gateway Reachability',
-                  onPressed: ip.isNotEmpty
-                      ? () {
-                          context
-                              .read<LoadBalancingBloc>()
-                              .add(PingGatewayRequested(ip));
-                        }
-                      : null,
-                ),
-          helperText: pingResult,
-          helperStyle: TextStyle(
-            color: pingResult != null && pingResult.contains('Success')
-                ? Colors.green
-                : Colors.orange,
-          )
-        ),
-        keyboardType: TextInputType.number,
-        validator: (value) =>
-            value == null || value.isEmpty ? 'Please enter a Gateway IP' : null,
-      );
-    });
+        return TextFormField(
+          controller: controller,
+          // Use a ValueListenableBuilder to enable/disable the button
+          // based on whether the text field is empty or not. This is more efficient.
+          decoration: InputDecoration(
+            labelText: labelText,
+            hintText: hintText,
+            suffixIcon: isPinging
+                ? const Padding(
+                    padding: EdgeInsets.all(12.0),
+                    child: SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2.5)),
+                  )
+                : ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (context, value, child) {
+                      return IconButton(
+                        icon: const Icon(Icons.network_ping),
+                        tooltip: 'Test Gateway Reachability',
+                        onPressed: value.text.isNotEmpty
+                            ? () {
+                                debugPrint('--- PING BUTTON PRESSED for IP: $ip ---');
+                                context
+                                    .read<LoadBalancingBloc>()
+                                    .add(PingGatewayRequested(ip));
+                              }
+                            : null,
+                      );
+                    },
+                  ),
+            helperText: pingResult,
+            helperStyle: TextStyle(
+              color: pingResult != null && pingResult.contains('Success')
+                  ? Colors.green
+                  : Colors.orange,
+            ),
+          ),
+          keyboardType: TextInputType.number,
+          validator: (value) =>
+              value == null || value.isEmpty ? 'Please enter a Gateway IP' : null,
+        );
+      },
+    );
   }
 }

@@ -41,6 +41,7 @@ class MyApp extends StatelessWidget {
               return LoadBalancingBloc(
                 getInterfaces: GetInterfaces(repository),
                 getRoutingTable: GetRoutingTable(repository),
+                // The PingGateway use case now correctly depends on the repository
                 pingGateway: PingGateway(repository),
               );
             },
@@ -67,19 +68,20 @@ class MyApp extends StatelessWidget {
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\test.dart ---
 
-// import 'dart:convert';
-// import 'package:dartssh2/dartssh2.dart';
+// import 'package:dart_ping/dart_ping.dart';
 
 // void main() async {
-//   final socket = await SSHSocket.connect('192.168.85.91', 22);
-//   final client = SSHClient(
-//     socket,
-//     username: 'cisco',
-//     onPasswordRequest: () => 'cisco',
-//   );
-//   final result = await client.run('show ip interface brief');
-//   print(utf8.decode(result));
-//   client.close();
+//   // Create ping object with desired args
+//   final ping = Ping('google.com', count: 5);
+
+//   // [Optional]
+//   // Preview command that will be run (helpful for debugging)
+//   print('Running command: ${ping.command}');
+
+//   // Begin ping process and listen for output
+//   ping.stream.listen((event) {
+//     print(event);
+//   });
 // }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\core\error\failure.dart ---
@@ -145,8 +147,9 @@ import 'package:load_balance/domain/entities/router_interface.dart';
 abstract class RemoteDataSource {
   Future<void> checkRestApiCredentials(DeviceCredentials credentials);
   Future<List<RouterInterface>> fetchInterfaces(DeviceCredentials credentials);
-  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
   Future<String> getRoutingTable(DeviceCredentials credentials);
+  // Add the pingGateway method back to the interface
+  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource_impl.dart ---
@@ -158,15 +161,21 @@ import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
+import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
+import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+import 'package:ctelnet/ctelnet.dart';
 import 'remote_datasource.dart';
 
 class RemoteDataSourceImpl implements RemoteDataSource {
-  static const _commandTimeout = Duration(seconds: 15);
+  static const _commandTimeout = Duration(seconds: 20);
 
-  /// Helper to establish a new SSH client connection for each request.
+  // =======================================================================
+  // SSH Implementation (Stable)
+  // =======================================================================
+
   Future<SSHClient> _createSshClient(DeviceCredentials credentials) async {
     try {
       final socket = await SSHSocket.connect(credentials.ip, 22,
@@ -188,117 +197,282 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     }
   }
 
+  // =======================================================================
+  // Telnet Implementation
+  // =======================================================================
+
+  /// Executes standard, non-interactive commands over Telnet.
+  Future<String> _executeTelnetCommands(
+      DeviceCredentials credentials, List<String> commands) async {
+    final completer = Completer<String>();
+    final outputBuffer = StringBuffer();
+    CTelnetClient? client;
+    StreamSubscription<Message>? subscription;
+
+    var state = 'login';
+    int commandIndex = 0;
+    final allCommands = ['terminal length 0', ...commands];
+
+    client = CTelnetClient(
+      host: credentials.ip,
+      port: 23,
+      timeout: const Duration(seconds: 15),
+      onConnect: () => debugPrint('[TELNET] Connected.'),
+      onDisconnect: () {
+        debugPrint('[TELNET] Disconnected.');
+        if (!completer.isCompleted) {
+          completer.complete(outputBuffer.toString());
+        }
+        subscription?.cancel();
+      },
+      onError: (error) {
+        if (!completer.isCompleted) {
+          completer.completeError(ServerFailure("Telnet Error: $error"));
+        }
+        subscription?.cancel();
+      },
+    );
+
+    try {
+      subscription = (await client.connect())?.listen((data) {
+        final receivedText = data.text.trim();
+        outputBuffer.write(data.text);
+        debugPrint("<< TELNET RECV: ${receivedText.replaceAll('\r\n', ' ')}");
+
+        void executeNextCommand() {
+          if (commandIndex < allCommands.length) {
+            final cmd = allCommands[commandIndex];
+            debugPrint(">> TELNET SEND: $cmd");
+            client?.send('$cmd\n');
+            commandIndex++;
+          } else {
+            if (!completer.isCompleted) {
+              client?.disconnect();
+            }
+          }
+        }
+
+        switch (state) {
+          case 'login':
+            if (receivedText.toLowerCase().contains('username')) {
+              client?.send('${credentials.username}\n');
+            } else if (receivedText.toLowerCase().contains('password')) {
+              client?.send('${credentials.password}\n');
+            } else if (receivedText.endsWith('>')) {
+              state = 'enable';
+              client?.send('enable\n');
+            } else if (receivedText.endsWith('#')) {
+              state = 'executing';
+              outputBuffer.clear();
+              executeNextCommand();
+            }
+            break;
+          case 'enable':
+            if (receivedText.toLowerCase().contains('password')) {
+              client?.send('${credentials.enablePassword ?? ''}\n');
+            } else if (receivedText.endsWith('#')) {
+              state = 'executing';
+              outputBuffer.clear();
+              executeNextCommand();
+            }
+            break;
+          case 'executing':
+            if (receivedText.endsWith('#')) {
+              if (commandIndex < allCommands.length) {
+                executeNextCommand();
+              } else {
+                if (!completer.isCompleted) {
+                  client?.disconnect();
+                }
+              }
+            }
+            break;
+        }
+      });
+    } catch (e) {
+      if (!completer.isCompleted) {
+        completer.completeError(ServerFailure("Telnet Connection Failed: $e"));
+      }
+    }
+
+    return completer.future.timeout(_commandTimeout, onTimeout: () {
+      client?.disconnect();
+      throw const ServerFailure("Telnet operation timed out.");
+    });
+  }
+
+  /// A specialized method to handle the interactive nature of the ping command over Telnet.
+  Future<String> _executeTelnetPing(
+      DeviceCredentials credentials, String ipAddress) async {
+    final completer = Completer<String>();
+    CTelnetClient? client;
+    StreamSubscription<Message>? subscription;
+    var state = 'login';
+
+    client = CTelnetClient(
+      host: credentials.ip,
+      port: 23,
+      timeout: const Duration(seconds: 15),
+      onConnect: () => debugPrint('[PING] Connected.'),
+      onDisconnect: () {
+        debugPrint('[PING] Disconnected.');
+        if (!completer.isCompleted) {
+          // If we disconnect before getting a clear result, it's a failure.
+          completer.complete('Ping failed. Check IP or connectivity.');
+        }
+        subscription?.cancel();
+      },
+      onError: (error) => !completer.isCompleted ? completer.completeError(error) : null,
+    );
+
+    try {
+      subscription = (await client.connect())?.listen((data) {
+        final receivedText = data.text;
+        debugPrint("<< PING RECV: ${receivedText.replaceAll('\r\n', ' ')}");
+
+        // Look for immediate success or failure indicators
+        if (receivedText.contains('!!!')) {
+          if (!completer.isCompleted) {
+            completer.complete('Success! Gateway is reachable.');
+            client?.disconnect();
+          }
+        } else if (receivedText.contains('...')) {
+           if (!completer.isCompleted) {
+            completer.complete('Timeout. Gateway is not reachable.');
+            client?.disconnect();
+          }
+        }
+
+        // Handle login process
+        final trimmedText = receivedText.trim();
+        if (state == 'login') {
+          if (trimmedText.toLowerCase().contains('username')) {
+            client?.send('${credentials.username}\n');
+          } else if (trimmedText.toLowerCase().contains('password')) {
+            client?.send('${credentials.password}\n');
+          } else if (trimmedText.endsWith('>')) {
+            state = 'enable';
+            client?.send('enable\n');
+          } else if (trimmedText.endsWith('#')) {
+            state = 'executing';
+            client?.send('ping $ipAddress repeat 2\n');
+          }
+        } else if (state == 'enable') {
+           if (trimmedText.toLowerCase().contains('password')) {
+            client?.send('${credentials.enablePassword ?? ''}\n');
+          } else if (trimmedText.endsWith('#')) {
+            state = 'executing';
+            client?.send('ping $ipAddress repeat 2\n');
+          }
+        }
+      });
+    } catch (e) {
+       if (!completer.isCompleted) {
+          completer.completeError(ServerFailure("Ping Connection Failed: $e"));
+       }
+    }
+
+    return completer.future.timeout(_commandTimeout, onTimeout: () {
+      client?.disconnect();
+      // If we time out without a clear success/fail, report a generic timeout.
+      return 'Timeout. Gateway is not reachable.';
+    });
+  }
+
+  // =======================================================================
+  // Public API Methods (Now using the correct Telnet helpers)
+  // =======================================================================
+
   @override
   Future<List<RouterInterface>> fetchInterfaces(
       DeviceCredentials credentials) async {
-    SSHClient? client;
-    try {
-      client = await _createSshClient(credentials);
-      final result =
-          await client.run('show ip interface brief').timeout(_commandTimeout);
-      final decodedResult = utf8.decode(result);
-      final lines = decodedResult.split('\n');
-      final interfaces = <RouterInterface>[];
-      final regex = RegExp(
-          r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
-
-      for (final line in lines) {
-        final match = regex.firstMatch(line);
-        if (match != null) {
-          interfaces.add(RouterInterface(
-            name: match.group(1)!,
-            ipAddress: match.group(2)!,
-            status: match.group(3)!,
-          ));
-        }
+    String result;
+    if (credentials.type == ConnectionType.ssh) {
+      SSHClient? client;
+      try {
+        client = await _createSshClient(credentials);
+        final rawResult =
+            await client.run('show ip interface brief').timeout(_commandTimeout);
+        result = utf8.decode(rawResult);
+      } finally {
+        client?.close();
       }
-      return interfaces;
-    } finally {
-      client?.close();
+    } else {
+      result =
+          await _executeTelnetCommands(credentials, ['show ip interface brief']);
     }
+
+    final lines = result.split('\n');
+    final interfaces = <RouterInterface>[];
+    final regex = RegExp(
+        r'^(\S+)\s+([\d\.]+)\s+\w+\s+\w+\s+(up|down|administratively down)');
+
+    for (final line in lines) {
+      final match = regex.firstMatch(line);
+      if (match != null) {
+        interfaces.add(RouterInterface(
+          name: match.group(1)!,
+          ipAddress: match.group(2)!,
+          status: match.group(3)!,
+        ));
+      }
+    }
+    return interfaces;
   }
 
   @override
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
-    SSHClient? client;
-    try {
-      client = await _createSshClient(credentials);
-      // Use the reliable interactive shell method for this multi-step command.
-      final shell = await client.shell(
-        pty: SSHPtyConfig(type: 'xterm', width: 120, height: 80),
-      );
+    String rawResult;
 
-      final completer = Completer<String>();
-      final buffer = StringBuffer();
-      late StreamSubscription subscription;
-      const prompt = '#';
-      int promptCount = 0;
-
-      subscription = shell.stdout.listen(
-        (data) {
-          final decodedString = utf8.decode(data, allowMalformed: true);
-          buffer.write(decodedString);
-          if (decodedString.trim().endsWith(prompt)) {
-            promptCount++;
-            if (promptCount == 1) {
-              shell.stdin.add(utf8.encode('terminal length 0\n'));
-            } else if (promptCount == 2) {
-              shell.stdin.add(utf8.encode('show ip route\n'));
-            } else if (promptCount == 3) {
-              if (!completer.isCompleted) {
-                subscription.cancel();
-                final fullOutput = buffer.toString();
-                final startOfOutput = fullOutput.indexOf('show ip route\r\n');
-                final endOfOutput = fullOutput.lastIndexOf(prompt);
-                if (startOfOutput != -1 && endOfOutput > startOfOutput) {
-                  final commandAndNewlineLength = 'show ip route\r\n'.length;
-                  final relevantOutput = fullOutput.substring(
-                      startOfOutput + commandAndNewlineLength, endOfOutput);
-                  completer.complete(relevantOutput.trim());
-                } else {
-                  completer.complete(fullOutput.trim());
-                }
-              }
-            }
-          }
-        },
-        onError: (error) =>
-            !completer.isCompleted ? completer.completeError(error) : null,
-        onDone: () => !completer.isCompleted
-            ? completer.complete(buffer.toString().trim())
-            : null,
-      );
-
-      return await completer.future.timeout(_commandTimeout);
-    } finally {
-      client?.close();
+    if (credentials.type == ConnectionType.ssh) {
+      SSHClient? client;
+      try {
+        client = await _createSshClient(credentials);
+        final sshRawResult = await client
+            .run('terminal length 0\nshow ip route')
+            .timeout(_commandTimeout);
+        rawResult = utf8.decode(sshRawResult);
+      } finally {
+        client?.close();
+      }
+    } else {
+      rawResult = await _executeTelnetCommands(credentials, ['show ip route']);
     }
+
+    final startOfOutput = rawResult.indexOf('show ip route');
+    final endOfOutput = rawResult.lastIndexOf(RegExp(r'\S+[>#]'));
+    if (startOfOutput != -1 && endOfOutput > startOfOutput) {
+      return rawResult
+          .substring(startOfOutput + 'show ip route'.length, endOfOutput)
+          .trim();
+    }
+    return rawResult;
   }
 
   @override
   Future<String> pingGateway(
       DeviceCredentials credentials, String ipAddress) async {
-    SSHClient? client;
-    try {
-      client = await _createSshClient(credentials);
-      final result =
-          await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
-      final decodedResult = utf8.decode(result);
-      if (decodedResult.contains('!!!')) {
-        return 'Success! Gateway is reachable.';
-      } else if (decodedResult.contains('...')) {
-        return 'Timeout. Gateway is not reachable.';
-      } else {
+    if (credentials.type == ConnectionType.ssh) {
+      SSHClient? client;
+      try {
+        client = await _createSshClient(credentials);
+        final rawSshResult =
+            await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
+        final result = utf8.decode(rawSshResult);
+        if (result.contains('!!!')) return 'Success! Gateway is reachable.';
+        if (result.contains('...')) return 'Timeout. Gateway is not reachable.';
         return 'Ping failed. Check IP or connectivity.';
+      } finally {
+        client?.close();
       }
-    } finally {
-      client?.close();
+    } else {
+      // Use the new, specialized ping method for Telnet
+      return await _executeTelnetPing(credentials, ipAddress);
     }
   }
 
   @override
   Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
-    // REST API is stateless and doesn't need the same connection management.
     final dio = Dio();
     final String basicAuth =
         'Basic ${base64Encode(utf8.encode('${credentials.username}:${credentials.password}'))}';
@@ -354,9 +528,8 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<void> checkCredentials(DeviceCredentials credentials) async {
-    // This method now handles the connection logic based on the type.
-    if (credentials.type == ConnectionType.ssh) {
-      // Create a temporary client just to check credentials, then close it.
+    if (credentials.type == ConnectionType.ssh ||
+        credentials.type == ConnectionType.telnet) {
       try {
         await remoteDataSource.fetchInterfaces(credentials);
       } on ServerFailure catch (e) {
@@ -366,13 +539,12 @@ class DeviceRepositoryImpl implements DeviceRepository {
       }
     } else if (credentials.type == ConnectionType.restApi) {
       return await remoteDataSource.checkRestApiCredentials(credentials);
-    } else {
-      throw const ServerFailure('Telnet is not implemented.');
     }
   }
 
   @override
-  Future<List<RouterInterface>> getInterfaces(DeviceCredentials credentials) async {
+  Future<List<RouterInterface>> getInterfaces(
+      DeviceCredentials credentials) async {
     try {
       return await remoteDataSource.fetchInterfaces(credentials);
     } on ServerFailure catch (e) {
@@ -383,9 +555,9 @@ class DeviceRepositoryImpl implements DeviceRepository {
   }
 
   @override
-  Future<String> pingGateway({required DeviceCredentials credentials, required String ipAddress}) async {
+  Future<String> getRoutingTable(DeviceCredentials credentials) async {
     try {
-      return await remoteDataSource.pingGateway(credentials, ipAddress);
+      return await remoteDataSource.getRoutingTable(credentials);
     } on ServerFailure catch (e) {
       return e.message;
     } catch (e) {
@@ -393,10 +565,13 @@ class DeviceRepositoryImpl implements DeviceRepository {
     }
   }
 
+  // Add the pingGateway implementation back
   @override
-  Future<String> getRoutingTable(DeviceCredentials credentials) async {
+  Future<String> pingGateway(
+      {required DeviceCredentials credentials,
+      required String ipAddress}) async {
     try {
-      return await remoteDataSource.getRoutingTable(credentials);
+      return await remoteDataSource.pingGateway(credentials, ipAddress);
     } on ServerFailure catch (e) {
       return e.message;
     } catch (e) {
@@ -452,27 +627,19 @@ class RouterInterface extends Equatable {
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\repositories\device_repository.dart ---
 
-// domain/repositories/device_repository.dart
-import 'package:load_balance/core/error/failure.dart';
+// lib/domain/repositories/device_repository.dart
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 abstract class DeviceRepository {
-  /// Checks credentials by attempting to connect to the device.
-  /// Throws a [ServerFailure] if connection fails.
   Future<void> checkCredentials(DeviceCredentials credentials);
-
-  /// Fetches the list of interfaces from the device.
   Future<List<RouterInterface>> getInterfaces(DeviceCredentials credentials);
-
-  /// Pings a gateway IP from the device to check reachability.
+  Future<String> getRoutingTable(DeviceCredentials credentials);
+  // Add the pingGateway method back to the repository interface
   Future<String> pingGateway({
     required DeviceCredentials credentials,
     required String ipAddress,
   });
-
-  /// Fetches the current IP routing table from the device.
-  Future<String> getRoutingTable(DeviceCredentials credentials);
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\check_credentials.dart ---
@@ -527,7 +694,7 @@ class GetRoutingTable {
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\ping_gateway.dart ---
 
-// domain/usecases/ping_gateway.dart
+// lib/domain/usecases/ping_gateway.dart
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
 
@@ -536,6 +703,7 @@ class PingGateway {
 
   PingGateway(this.repository);
 
+  // The call method now requires credentials again.
   Future<String> call({
     required DeviceCredentials credentials,
     required String ipAddress,
@@ -682,50 +850,98 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     on<FetchInterfacesRequested>(_onFetchInterfaces);
     on<FetchRoutingTableRequested>(_onFetchRoutingTable);
     on<PingGatewayRequested>(_onPingGateway);
-    on<LoadBalancingTypeSelected>((event, emit) => emit(state.copyWith(type: event.type)));
+    on<LoadBalancingTypeSelected>(
+      (event, emit) => emit(state.copyWith(type: event.type)),
+    );
     on<ApplyEcmpConfig>(_onApplyEcmpConfig);
   }
 
   void _onScreenStarted(ScreenStarted event, Emitter<LoadBalancingState> emit) {
-    // Simply store the credentials and trigger the initial data fetch.
     emit(state.copyWith(credentials: event.credentials));
     add(FetchInterfacesRequested());
   }
 
-  Future<void> _onFetchInterfaces(FetchInterfacesRequested event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onFetchInterfaces(
+    FetchInterfacesRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
     if (state.credentials == null) return;
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
     try {
-      // Pass credentials for each request.
       final interfaces = await getInterfaces(state.credentials!);
-      emit(state.copyWith(interfaces: interfaces, interfacesStatus: DataStatus.success));
+      emit(
+        state.copyWith(
+          interfaces: interfaces,
+          interfacesStatus: DataStatus.success,
+        ),
+      );
     } on ServerFailure catch (e) {
-      emit(state.copyWith(interfacesStatus: DataStatus.failure, error: e.message));
+      emit(
+        state.copyWith(interfacesStatus: DataStatus.failure, error: e.message),
+      );
     }
   }
 
-  Future<void> _onFetchRoutingTable(FetchRoutingTableRequested event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onFetchRoutingTable(
+    FetchRoutingTableRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
     if (state.credentials == null) return;
-    emit(state.copyWith(routingTableStatus: DataStatus.loading, clearRoutingTable: true));
+    emit(
+      state.copyWith(
+        routingTableStatus: DataStatus.loading,
+        clearRoutingTable: true,
+      ),
+    );
     try {
-      // Pass credentials for each request.
       final table = await getRoutingTable(state.credentials!);
-      emit(state.copyWith(routingTable: table, routingTableStatus: DataStatus.success));
+      emit(
+        state.copyWith(
+          routingTable: table,
+          routingTableStatus: DataStatus.success,
+        ),
+      );
     } on ServerFailure catch (e) {
-      emit(state.copyWith(routingTable: e.message, routingTableStatus: DataStatus.failure));
+      emit(
+        state.copyWith(
+          routingTable: e.message,
+          routingTableStatus: DataStatus.failure,
+        ),
+      );
     }
   }
 
-  Future<void> _onPingGateway(PingGatewayRequested event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onPingGateway(
+    PingGatewayRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    // The BLoC now needs to pass the credentials to the use case.
     if (state.credentials == null) return;
-    emit(state.copyWith(pingStatus: DataStatus.loading, pingingIp: event.ipAddress));
-    final result = await pingGateway(credentials: state.credentials!, ipAddress: event.ipAddress);
+    emit(
+      state.copyWith(
+        pingStatus: DataStatus.loading,
+        pingingIp: event.ipAddress,
+      ),
+    );
+    final result = await pingGateway(
+      credentials: state.credentials!,
+      ipAddress: event.ipAddress,
+    );
     final newPingResults = Map<String, String>.from(state.pingResults);
     newPingResults[event.ipAddress] = result;
-    emit(state.copyWith(pingResults: newPingResults, pingStatus: DataStatus.success, pingingIp: ''));
+    emit(
+      state.copyWith(
+        pingResults: newPingResults,
+        pingStatus: DataStatus.success,
+        pingingIp: '',
+      ),
+    );
   }
 
-  Future<void> _onApplyEcmpConfig(ApplyEcmpConfig event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onApplyEcmpConfig(
+    ApplyEcmpConfig event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
     // Logic to apply ECMP config will go here.
   }
 }
@@ -1325,7 +1541,7 @@ class _RouterInfoSection extends StatelessWidget {
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\widgets\ecmp_form.dart ---
 
-// presentation/screens/load_balancing/widgets/ecmp_form.dart
+// lib/presentation/screens/load_balancing/widgets/ecmp_form.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
@@ -1380,15 +1596,15 @@ class _EcmpFormState extends State<EcmpForm> {
               const Text(
                   'Enter the gateway IPs for your two internet connections. Traffic will be distributed equally.'),
               const SizedBox(height: 24),
-              _buildGatewayTextField(
-                context: context,
+              // Use the new dedicated widget for the input field
+              _GatewayInputField(
                 controller: _gateway1Controller,
                 labelText: 'Gateway IP 1',
                 hintText: 'e.g., 203.0.113.1',
               ),
               const SizedBox(height: 16),
-              _buildGatewayTextField(
-                context: context,
+              // Use the new dedicated widget for the input field
+              _GatewayInputField(
                 controller: _gateway2Controller,
                 labelText: 'Gateway IP 2',
                 hintText: 'e.g., 198.51.100.1',
@@ -1415,56 +1631,76 @@ class _EcmpFormState extends State<EcmpForm> {
       ),
     );
   }
+}
 
-  // Helper widget for gateway text fields with a Test button
-  Widget _buildGatewayTextField({
-    required BuildContext context,
-    required TextEditingController controller,
-    required String labelText,
-    required String hintText,
-  }) {
+/// A dedicated, stateless widget for the gateway input field.
+/// This improves reliability by isolating the build logic.
+class _GatewayInputField extends StatelessWidget {
+  final TextEditingController controller;
+  final String labelText;
+  final String hintText;
+
+  const _GatewayInputField({
+    required this.controller,
+    required this.labelText,
+    required this.hintText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Use a BlocBuilder to react to state changes for this specific field.
     return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
-        builder: (context, state) {
-      final ip = controller.text;
-      final isPinging = state.pingStatus == DataStatus.loading && state.pingingIp == ip;
-      final pingResult = state.pingResults[ip];
+      builder: (context, state) {
+        final ip = controller.text;
+        final isPinging =
+            state.pingStatus == DataStatus.loading && state.pingingIp == ip;
+        final pingResult = state.pingResults[ip];
 
-      return TextFormField(
-        controller: controller,
-        decoration: InputDecoration(
-          labelText: labelText,
-          hintText: hintText,
-          suffixIcon: isPinging
-              ? const Padding(
-                  padding: EdgeInsets.all(12.0),
-                  child: SizedBox(
-                    height: 12,
-                    width: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-                )
-              : IconButton(
-                  icon: const Icon(Icons.network_ping),
-                  tooltip: 'Test Gateway Reachability',
-                  onPressed: ip.isNotEmpty
-                      ? () {
-                          context
-                              .read<LoadBalancingBloc>()
-                              .add(PingGatewayRequested(ip));
-                        }
-                      : null,
-                ),
-          helperText: pingResult,
-          helperStyle: TextStyle(
-            color: pingResult != null && pingResult.contains('Success')
-                ? Colors.green
-                : Colors.orange,
-          )
-        ),
-        keyboardType: TextInputType.number,
-        validator: (value) =>
-            value == null || value.isEmpty ? 'Please enter a Gateway IP' : null,
-      );
-    });
+        return TextFormField(
+          controller: controller,
+          // Use a ValueListenableBuilder to enable/disable the button
+          // based on whether the text field is empty or not. This is more efficient.
+          decoration: InputDecoration(
+            labelText: labelText,
+            hintText: hintText,
+            suffixIcon: isPinging
+                ? const Padding(
+                    padding: EdgeInsets.all(12.0),
+                    child: SizedBox(
+                        height: 24,
+                        width: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2.5)),
+                  )
+                : ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (context, value, child) {
+                      return IconButton(
+                        icon: const Icon(Icons.network_ping),
+                        tooltip: 'Test Gateway Reachability',
+                        onPressed: value.text.isNotEmpty
+                            ? () {
+                                debugPrint('--- PING BUTTON PRESSED for IP: $ip ---');
+                                context
+                                    .read<LoadBalancingBloc>()
+                                    .add(PingGatewayRequested(ip));
+                              }
+                            : null,
+                      );
+                    },
+                  ),
+            helperText: pingResult,
+            helperStyle: TextStyle(
+              color: pingResult != null && pingResult.contains('Success')
+                  ? Colors.green
+                  : Colors.orange,
+            ),
+          ),
+          keyboardType: TextInputType.number,
+          validator: (value) =>
+              value == null || value.isEmpty ? 'Please enter a Gateway IP' : null,
+        );
+      },
+    );
   }
 }
 

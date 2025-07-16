@@ -18,6 +18,7 @@ dependencies:
   dartssh2: ^2.13.0
   ctelnet: ^0.3.1
   dio: ^5.8.0+1
+  dart_ping: ^9.0.1
 
 dev_dependencies:
   flutter_test:

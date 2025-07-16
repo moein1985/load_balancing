@@ -42,10 +42,10 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   // =======================================================================
-  // Telnet Implementation (Definitive Fix)
+  // Telnet Implementation
   // =======================================================================
 
-  /// Executes a sequence of commands over Telnet using a robust state machine.
+  /// Executes standard, non-interactive commands over Telnet.
   Future<String> _executeTelnetCommands(
       DeviceCredentials credentials, List<String> commands) async {
     final completer = Completer<String>();
@@ -90,14 +90,12 @@ class RemoteDataSourceImpl implements RemoteDataSource {
             client?.send('$cmd\n');
             commandIndex++;
           } else {
-            // All commands have been sent. The next prompt means we're done.
             if (!completer.isCompleted) {
               client?.disconnect();
             }
           }
         }
 
-        // State machine for login and command execution
         switch (state) {
           case 'login':
             if (receivedText.toLowerCase().contains('username')) {
@@ -109,7 +107,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
               client?.send('enable\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear(); // Clear login junk from buffer
+              outputBuffer.clear();
               executeNextCommand();
             }
             break;
@@ -118,14 +116,19 @@ class RemoteDataSourceImpl implements RemoteDataSource {
               client?.send('${credentials.enablePassword ?? ''}\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear(); // Clear login junk from buffer
+              outputBuffer.clear();
               executeNextCommand();
             }
             break;
           case 'executing':
-            // We are in command execution mode. Every prompt triggers the next command.
             if (receivedText.endsWith('#')) {
-              executeNextCommand();
+              if (commandIndex < allCommands.length) {
+                executeNextCommand();
+              } else {
+                if (!completer.isCompleted) {
+                  client?.disconnect();
+                }
+              }
             }
             break;
         }
@@ -142,8 +145,86 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     });
   }
 
+  /// A specialized method to handle the interactive nature of the ping command over Telnet.
+  Future<String> _executeTelnetPing(
+      DeviceCredentials credentials, String ipAddress) async {
+    final completer = Completer<String>();
+    CTelnetClient? client;
+    StreamSubscription<Message>? subscription;
+    var state = 'login';
+
+    client = CTelnetClient(
+      host: credentials.ip,
+      port: 23,
+      timeout: const Duration(seconds: 15),
+      onConnect: () => debugPrint('[PING] Connected.'),
+      onDisconnect: () {
+        debugPrint('[PING] Disconnected.');
+        if (!completer.isCompleted) {
+          // If we disconnect before getting a clear result, it's a failure.
+          completer.complete('Ping failed. Check IP or connectivity.');
+        }
+        subscription?.cancel();
+      },
+      onError: (error) => !completer.isCompleted ? completer.completeError(error) : null,
+    );
+
+    try {
+      subscription = (await client.connect())?.listen((data) {
+        final receivedText = data.text;
+        debugPrint("<< PING RECV: ${receivedText.replaceAll('\r\n', ' ')}");
+
+        // Look for immediate success or failure indicators
+        if (receivedText.contains('!!!')) {
+          if (!completer.isCompleted) {
+            completer.complete('Success! Gateway is reachable.');
+            client?.disconnect();
+          }
+        } else if (receivedText.contains('...')) {
+           if (!completer.isCompleted) {
+            completer.complete('Timeout. Gateway is not reachable.');
+            client?.disconnect();
+          }
+        }
+
+        // Handle login process
+        final trimmedText = receivedText.trim();
+        if (state == 'login') {
+          if (trimmedText.toLowerCase().contains('username')) {
+            client?.send('${credentials.username}\n');
+          } else if (trimmedText.toLowerCase().contains('password')) {
+            client?.send('${credentials.password}\n');
+          } else if (trimmedText.endsWith('>')) {
+            state = 'enable';
+            client?.send('enable\n');
+          } else if (trimmedText.endsWith('#')) {
+            state = 'executing';
+            client?.send('ping $ipAddress repeat 2\n');
+          }
+        } else if (state == 'enable') {
+           if (trimmedText.toLowerCase().contains('password')) {
+            client?.send('${credentials.enablePassword ?? ''}\n');
+          } else if (trimmedText.endsWith('#')) {
+            state = 'executing';
+            client?.send('ping $ipAddress repeat 2\n');
+          }
+        }
+      });
+    } catch (e) {
+       if (!completer.isCompleted) {
+          completer.completeError(ServerFailure("Ping Connection Failed: $e"));
+       }
+    }
+
+    return completer.future.timeout(_commandTimeout, onTimeout: () {
+      client?.disconnect();
+      // If we time out without a clear success/fail, report a generic timeout.
+      return 'Timeout. Gateway is not reachable.';
+    });
+  }
+
   // =======================================================================
-  // Public API Methods (Switching between SSH and Telnet)
+  // Public API Methods (Now using the correct Telnet helpers)
   // =======================================================================
 
   @override
@@ -202,7 +283,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       rawResult = await _executeTelnetCommands(credentials, ['show ip route']);
     }
 
-    // Clean up the output to remove commands and prompts
     final startOfOutput = rawResult.indexOf('show ip route');
     final endOfOutput = rawResult.lastIndexOf(RegExp(r'\S+[>#]'));
     if (startOfOutput != -1 && endOfOutput > startOfOutput) {
@@ -216,34 +296,27 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   @override
   Future<String> pingGateway(
       DeviceCredentials credentials, String ipAddress) async {
-    String result;
     if (credentials.type == ConnectionType.ssh) {
       SSHClient? client;
       try {
         client = await _createSshClient(credentials);
         final rawSshResult =
             await client.run('ping $ipAddress repeat 2').timeout(_commandTimeout);
-        result = utf8.decode(rawSshResult);
+        final result = utf8.decode(rawSshResult);
+        if (result.contains('!!!')) return 'Success! Gateway is reachable.';
+        if (result.contains('...')) return 'Timeout. Gateway is not reachable.';
+        return 'Ping failed. Check IP or connectivity.';
       } finally {
         client?.close();
       }
     } else {
-      result =
-          await _executeTelnetCommands(credentials, ['ping $ipAddress repeat 2']);
-    }
-
-    if (result.contains('!!!')) {
-      return 'Success! Gateway is reachable.';
-    } else if (result.contains('...')) {
-      return 'Timeout. Gateway is not reachable.';
-    } else {
-      return 'Ping failed. Check IP or connectivity.';
+      // Use the new, specialized ping method for Telnet
+      return await _executeTelnetPing(credentials, ipAddress);
     }
   }
 
   @override
   Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
-    // This method remains unchanged
     final dio = Dio();
     final String basicAuth =
         'Basic ${base64Encode(utf8.encode('${credentials.username}:${credentials.password}'))}';

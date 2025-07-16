@@ -38,6 +38,7 @@ class MyApp extends StatelessWidget {
               return LoadBalancingBloc(
                 getInterfaces: GetInterfaces(repository),
                 getRoutingTable: GetRoutingTable(repository),
+                // The PingGateway use case now correctly depends on the repository
                 pingGateway: PingGateway(repository),
               );
             },

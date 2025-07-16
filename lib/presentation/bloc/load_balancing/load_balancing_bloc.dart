@@ -22,50 +22,98 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     on<FetchInterfacesRequested>(_onFetchInterfaces);
     on<FetchRoutingTableRequested>(_onFetchRoutingTable);
     on<PingGatewayRequested>(_onPingGateway);
-    on<LoadBalancingTypeSelected>((event, emit) => emit(state.copyWith(type: event.type)));
+    on<LoadBalancingTypeSelected>(
+      (event, emit) => emit(state.copyWith(type: event.type)),
+    );
     on<ApplyEcmpConfig>(_onApplyEcmpConfig);
   }
 
   void _onScreenStarted(ScreenStarted event, Emitter<LoadBalancingState> emit) {
-    // Simply store the credentials and trigger the initial data fetch.
     emit(state.copyWith(credentials: event.credentials));
     add(FetchInterfacesRequested());
   }
 
-  Future<void> _onFetchInterfaces(FetchInterfacesRequested event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onFetchInterfaces(
+    FetchInterfacesRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
     if (state.credentials == null) return;
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
     try {
-      // Pass credentials for each request.
       final interfaces = await getInterfaces(state.credentials!);
-      emit(state.copyWith(interfaces: interfaces, interfacesStatus: DataStatus.success));
+      emit(
+        state.copyWith(
+          interfaces: interfaces,
+          interfacesStatus: DataStatus.success,
+        ),
+      );
     } on ServerFailure catch (e) {
-      emit(state.copyWith(interfacesStatus: DataStatus.failure, error: e.message));
+      emit(
+        state.copyWith(interfacesStatus: DataStatus.failure, error: e.message),
+      );
     }
   }
 
-  Future<void> _onFetchRoutingTable(FetchRoutingTableRequested event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onFetchRoutingTable(
+    FetchRoutingTableRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
     if (state.credentials == null) return;
-    emit(state.copyWith(routingTableStatus: DataStatus.loading, clearRoutingTable: true));
+    emit(
+      state.copyWith(
+        routingTableStatus: DataStatus.loading,
+        clearRoutingTable: true,
+      ),
+    );
     try {
-      // Pass credentials for each request.
       final table = await getRoutingTable(state.credentials!);
-      emit(state.copyWith(routingTable: table, routingTableStatus: DataStatus.success));
+      emit(
+        state.copyWith(
+          routingTable: table,
+          routingTableStatus: DataStatus.success,
+        ),
+      );
     } on ServerFailure catch (e) {
-      emit(state.copyWith(routingTable: e.message, routingTableStatus: DataStatus.failure));
+      emit(
+        state.copyWith(
+          routingTable: e.message,
+          routingTableStatus: DataStatus.failure,
+        ),
+      );
     }
   }
 
-  Future<void> _onPingGateway(PingGatewayRequested event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onPingGateway(
+    PingGatewayRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    // The BLoC now needs to pass the credentials to the use case.
     if (state.credentials == null) return;
-    emit(state.copyWith(pingStatus: DataStatus.loading, pingingIp: event.ipAddress));
-    final result = await pingGateway(credentials: state.credentials!, ipAddress: event.ipAddress);
+    emit(
+      state.copyWith(
+        pingStatus: DataStatus.loading,
+        pingingIp: event.ipAddress,
+      ),
+    );
+    final result = await pingGateway(
+      credentials: state.credentials!,
+      ipAddress: event.ipAddress,
+    );
     final newPingResults = Map<String, String>.from(state.pingResults);
     newPingResults[event.ipAddress] = result;
-    emit(state.copyWith(pingResults: newPingResults, pingStatus: DataStatus.success, pingingIp: ''));
+    emit(
+      state.copyWith(
+        pingResults: newPingResults,
+        pingStatus: DataStatus.success,
+        pingingIp: '',
+      ),
+    );
   }
 
-  Future<void> _onApplyEcmpConfig(ApplyEcmpConfig event, Emitter<LoadBalancingState> emit) async {
+  Future<void> _onApplyEcmpConfig(
+    ApplyEcmpConfig event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
     // Logic to apply ECMP config will go here.
   }
 }

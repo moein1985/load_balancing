@@ -5,6 +5,7 @@ import 'package:load_balance/domain/entities/router_interface.dart';
 abstract class RemoteDataSource {
   Future<void> checkRestApiCredentials(DeviceCredentials credentials);
   Future<List<RouterInterface>> fetchInterfaces(DeviceCredentials credentials);
-  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
   Future<String> getRoutingTable(DeviceCredentials credentials);
+  // Add the pingGateway method back to the interface
+  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
 }
