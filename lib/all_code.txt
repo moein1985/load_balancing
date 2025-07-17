@@ -8,6 +8,7 @@ import 'package:load_balance/core/router/app_router.dart';
 import 'package:load_balance/data/datasources/remote_datasource_impl.dart';
 import 'package:load_balance/data/repositories/device_repository_impl.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/check_credentials.dart';
 import 'package:load_balance/domain/usecases/get_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_routing_table.dart';
@@ -41,8 +42,9 @@ class MyApp extends StatelessWidget {
               return LoadBalancingBloc(
                 getInterfaces: GetInterfaces(repository),
                 getRoutingTable: GetRoutingTable(repository),
-                // The PingGateway use case now correctly depends on the repository
                 pingGateway: PingGateway(repository),
+                // Provide the new use case to the BLoC
+                applyEcmpConfig: ApplyEcmpConfig(repository),
               );
             },
           ),
@@ -148,8 +150,9 @@ abstract class RemoteDataSource {
   Future<void> checkRestApiCredentials(DeviceCredentials credentials);
   Future<List<RouterInterface>> fetchInterfaces(DeviceCredentials credentials);
   Future<String> getRoutingTable(DeviceCredentials credentials);
-  // Add the pingGateway method back to the interface
   Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
+  // New method to apply ECMP configuration
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2);
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource_impl.dart ---
@@ -180,11 +183,10 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   @override
   Future<List<RouterInterface>> fetchInterfaces(
       DeviceCredentials credentials) async {
-    _logDebug('دریافت لیست Interface ها - ${credentials.type}');
-    
+    _logDebug('Fetching interface list - ${credentials.type}');
     String briefResult;
     String detailedResult;
-    
+
     if (credentials.type == ConnectionType.ssh) {
       briefResult = await _sshHandler.fetchInterfaces(credentials);
       detailedResult = await _sshHandler.fetchDetailedInterfaces(credentials);
@@ -201,14 +203,14 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final briefLines = briefResult.split('\n');
     final briefRegex = RegExp(
         r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)');
-
-    // ابتدا اینترفیس‌های اصلی را از brief پیدا کنیم
+    
+    // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
       final match = briefRegex.firstMatch(line);
       if (match != null && match.group(2) != 'unassigned') {
         final interfaceName = match.group(1)!;
-        // NVI0 را نادیده بگیر چون مجازی است
+        // Ignore NVI0 as it's a virtual interface
         if (!interfaceName.startsWith('NVI')) {
           mainInterfaces.add({
             'name': interfaceName,
@@ -219,23 +221,23 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       }
     }
 
-    // سپس آدرس‌های ثانویه را از detailed config پیدا کنیم
+    // Then, find secondary addresses from the detailed config
     final secondaryIps = _extractSecondaryIps(detailedResult);
-
-    // اینترفیس‌ها را بسازیم
+    
+    // Build the final interface list
     for (final interface in mainInterfaces) {
       final interfaceName = interface['name']!;
       final primaryIp = interface['primaryIp']!;
       final status = interface['status']!;
-      
-      // آدرس اصلی را اضافه کن
+
+      // Add the primary address
       interfaces.add(RouterInterface(
         name: interfaceName,
         ipAddress: primaryIp,
         status: status,
       ));
       
-      // آدرس‌های ثانویه را اضافه کن
+      // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
         interfaces.add(RouterInterface(
@@ -245,8 +247,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         ));
       }
     }
-    
-    _logDebug('${interfaces.length} Interface پردازش شد');
+
+    _logDebug('${interfaces.length} interfaces processed');
     return interfaces;
   }
 
@@ -254,17 +256,16 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final secondaryIps = <String, List<String>>{};
     final lines = configOutput.split('\n');
     String? currentInterface;
-    
+
     for (final line in lines) {
       final trimmedLine = line.trim();
-      
-      // پیدا کردن شروع تنظیمات اینترفیس
+      // Find the start of an interface configuration
       if (trimmedLine.startsWith('interface ')) {
         currentInterface = trimmedLine.split(' ')[1];
         secondaryIps[currentInterface] = [];
       }
-      
-      // پیدا کردن آدرس‌های IP ثانویه
+
+      // Find secondary IP addresses
       if (currentInterface != null && trimmedLine.contains('ip address') && trimmedLine.contains('secondary')) {
         final parts = trimmedLine.split(' ');
         if (parts.length >= 4) {
@@ -275,16 +276,15 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         }
       }
     }
-    
+
     return secondaryIps;
   }
 
   @override
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
-    _logDebug('دریافت جدول مسیریابی - ${credentials.type}');
+    _logDebug('Fetching routing table - ${credentials.type}');
 
     String rawResult;
-    
     if (credentials.type == ConnectionType.ssh) {
       rawResult = await _sshHandler.getRoutingTable(credentials);
     } else {
@@ -295,22 +295,19 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   String _cleanRoutingTableOutput(String rawResult) {
-    _logDebug('تمیز کردن خروجی جدول مسیریابی، طول ورودی: ${rawResult.length}');
-
+    _logDebug('Cleaning routing table output, input length: ${rawResult.length}');
     final lines = rawResult.split('\n');
     final cleanLines = <String>[];
     bool routeStarted = false;
-
     for (final line in lines) {
       final trimmedLine = line.trim();
-      
-      // شروع جدول مسیریابی
+      // Start of the routing table
       if (trimmedLine.startsWith('Codes:') ||
           trimmedLine.startsWith('Gateway of last resort')) {
         routeStarted = true;
       }
 
-      // پایان جدول مسیریابی
+      // End of the routing table (prompt)
       if (routeStarted && (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
         break;
       }
@@ -321,21 +318,20 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     }
 
     final result = cleanLines.join('\n').trim();
-    _logDebug('جدول مسیریابی تمیز شد، طول: ${result.length}');
+    _logDebug('Routing table cleaned, length: ${result.length}');
     return result;
   }
 
   @override
   Future<String> pingGateway(
       DeviceCredentials credentials, String ipAddress) async {
-    _logDebug('شروع ping برای IP: $ipAddress - ${credentials.type}');
-
+    _logDebug('Starting ping for IP: $ipAddress - ${credentials.type}');
     if (ipAddress.trim().isEmpty) {
-      return 'خطا: آدرس IP نمی‌تواند خالی باشد.';
+      return 'Error: IP address cannot be empty.';
     }
 
     if (!_isValidIpAddress(ipAddress.trim())) {
-      return 'خطا: فرمت آدرس IP نامعتبر است.';
+      return 'Error: Invalid IP address format.';
     }
 
     final cleanIp = ipAddress.trim();
@@ -347,18 +343,17 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         return await _telnetHandler.pingGateway(credentials, cleanIp);
       }
     } catch (e) {
-      _logDebug('خطا در ping: $e');
+      _logDebug('Error in ping: $e');
       if (e is ServerFailure) {
-        return 'خطا: ${e.message}';
+        return 'Error: ${e.message}';
       }
-      return 'خطا در ping: ${e.toString()}';
+      return 'Error in ping: ${e.toString()}';
     }
   }
 
   bool _isValidIpAddress(String ip) {
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip)) return false;
-
     final parts = ip.split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -369,8 +364,29 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
-    _logDebug('بررسی اعتبار REST API');
+    _logDebug('Checking REST API credentials');
     return await _restApiHandler.checkCredentials(credentials);
+  }
+
+  // Implementation for the new ECMP method
+  @override
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
+    _logDebug('Applying ECMP config - ${credentials.type}');
+    try {
+       if (credentials.type == ConnectionType.ssh) {
+        return await _sshHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+      } else if (credentials.type == ConnectionType.telnet) {
+        return await _telnetHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+      } else {
+        return 'Configuration via REST API is not yet supported.';
+      }
+    } on ServerFailure catch (e) {
+      _logDebug('ServerFailure applying ECMP config: ${e.message}');
+      return e.message;
+    } catch (e) {
+      _logDebug('Unknown error applying ECMP config: ${e.toString()}');
+      return 'An unknown error occurred: ${e.toString()}';
+    }
   }
 }
 
@@ -393,16 +409,17 @@ class RestApiClientHandler {
   }
 
   Future<void> checkCredentials(DeviceCredentials credentials) async {
-    _logDebug('بررسی اعتبار REST API');
+    _logDebug('Checking REST API credentials');
     
     final dio = Dio();
     final String basicAuth = 'Basic ${base64Encode(
         utf8.encode('${credentials.username}:${credentials.password}'))}';
     
+    // Allow self-signed certificates for lab environments
     (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
       client.badCertificateCallback = (cert, host, port) {
-        _logDebug('هشدار: گواهی SSL تایید نشده برای $host:$port');
+        _logDebug('Warning: Untrusted SSL certificate for $host:$port');
         return true;
       };
       return client;
@@ -416,32 +433,30 @@ class RestApiClientHandler {
             'Authorization': basicAuth,
             'Accept': 'application/yang-data+json'
           },
-          receiveTimeout: Duration(seconds: 10),
-          sendTimeout: Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+          sendTimeout: const Duration(seconds: 10),
         ),
       );
-      
-      _logDebug('REST API اتصال موفق - کد پاسخ: ${response.statusCode}');
+      _logDebug('REST API connection successful - Response code: ${response.statusCode}');
     } on DioException catch (e) {
-      _logDebug('خطا در REST API: ${e.type} - ${e.message}');
-      
+      _logDebug('REST API Error: ${e.type} - ${e.message}');
       if (e.response?.statusCode == 401) {
         throw const ServerFailure(
-            'احراز هویت ناموفق. نام کاربری و رمز عبور را بررسی کنید.');
+            'Authentication failed. Check your username and password.');
       } else if (e.type == DioExceptionType.connectionTimeout ||
           e.type == DioExceptionType.receiveTimeout) {
         throw const ServerFailure(
-            'زمان اتصال به پایان رسید. IP را بررسی کنید و مطمئن شوید RESTCONF فعال است.');
+            'Connection timed out. Check the IP and ensure RESTCONF is enabled.');
       } else if (e.type == DioExceptionType.connectionError) {
         throw const ServerFailure(
-            'خطا در اتصال. IP و دسترسی شبکه را بررسی کنید.');
+            'Connection error. Check the IP and network accessibility.');
       } else {
         throw ServerFailure(
-            'خطای RESTCONF: ${e.message ?? 'خطای ناشناخته Dio'}');
+            'RESTCONF Error: ${e.message ?? 'Unknown Dio error'}');
       }
     } catch (e) {
-      _logDebug('خطای ناشناخته REST API: $e');
-      throw ServerFailure('خطای ناشناخته: ${e.toString()}');
+      _logDebug('Unknown REST API error: $e');
+      throw ServerFailure('An unknown error occurred: ${e.toString()}');
     }
   }
 }
@@ -469,56 +484,52 @@ class SshClientHandler {
   }
 
   Future<SSHClient> _createSshClient(DeviceCredentials credentials) async {
-    _logDebug('ایجاد اتصال SSH به ${credentials.ip}');
-    
+    _logDebug('Creating SSH connection to ${credentials.ip}');
     try {
       final socket = await SSHSocket.connect(
-        credentials.ip, 
+        credentials.ip,
         22,
         timeout: _connectionTimeout,
       );
-      
       final client = SSHClient(
         socket,
         username: credentials.username,
         onPasswordRequest: () => credentials.password,
       );
-      
-      _logDebug('اتصال SSH برقرار شد');
+      _logDebug('SSH connection established');
       return client;
     } on TimeoutException {
-      _logDebug('خطا: زمان اتصال SSH به پایان رسید');
-      throw const ServerFailure('زمان اتصال به پایان رسید. لطفا IP و پورت را بررسی کنید.');
+      _logDebug('Error: SSH connection timed out');
+      throw const ServerFailure('Connection timed out. Please check the IP address and port.');
     } on SocketException catch (e) {
-      _logDebug('خطا: اتصال SSH ناموفق - ${e.message}');
-      throw const ServerFailure('امکان اتصال به دستگاه وجود ندارد. IP و پورت را بررسی کنید.');
+      _logDebug('Error: SSH connection failed - ${e.message}');
+      throw const ServerFailure('Unable to connect to the device. Check the IP address and port.');
     } catch (e) {
       final errorMsg = e.toString().toLowerCase();
       if (errorMsg.contains('auth')) {
-        _logDebug('خطا: احراز هویت SSH ناموفق');
-        throw const ServerFailure('احراز هویت ناموفق. نام کاربری و رمز عبور را بررسی کنید.');
+        _logDebug('Error: SSH authentication failed');
+        throw const ServerFailure('Authentication failed. Check your username and password.');
       }
-      _logDebug('خطا: SSH - $e');
-      throw ServerFailure('خطای SSH: ${e.toString()}');
+      _logDebug('Error: SSH - $e');
+      throw ServerFailure('SSH Error: ${e.toString()}');
     }
   }
 
   Future<String> _executeSshCommand(SSHClient client, String command) async {
     try {
-      _logDebug('اجرای دستور SSH: $command');
+      _logDebug('Executing SSH command: $command');
       final result = await client.run(command).timeout(_commandTimeout);
       final output = utf8.decode(result);
-      _logDebug('دستور SSH اجرا شد، طول خروجی: ${output.length}');
+      _logDebug('SSH command executed, output length: ${output.length}');
       return output;
     } catch (e) {
-      _logDebug('خطا در اجرای دستور SSH: $e');
+      _logDebug('Error executing SSH command: $e');
       rethrow;
     }
   }
 
   Future<String> _executeSshCommandsWithShell(SSHClient client, List<String> commands) async {
-    _logDebug('شروع اجرای دستورات SSH با Shell');
-    
+    _logDebug('Starting execution of SSH commands with Shell');
     try {
       final shell = await client.shell(
         pty: SSHPtyConfig(
@@ -526,32 +537,35 @@ class SshClientHandler {
           height: 24,
         ),
       );
-      
       final completer = Completer<String>();
       final output = StringBuffer();
       bool isReady = false;
       int commandIndex = 0;
-      
+
       void sendNextCommand() {
         if (commandIndex < commands.length) {
           final command = commands[commandIndex];
-          _logDebug('ارسال دستور SSH Shell: $command');
+          _logDebug('Sending SSH Shell command: $command');
           shell.stdin.add(utf8.encode('$command\n'));
           commandIndex++;
         }
       }
-      
+
       shell.stdout.cast<List<int>>().transform(utf8.decoder).listen((data) {
         output.write(data);
         _logDebug('SSH Shell Output: ${data.replaceAll('\r\n', '\\n').replaceAll('\n', '\\n')}');
-        
+
+        // Wait for the prompt before sending the first command
         if (!isReady && (data.contains('#') || data.contains('>'))) {
           isReady = true;
           sendNextCommand();
-        } else if (isReady && (data.contains('#') || data.contains('>'))) {
+        }
+        // After a command is sent, wait for the next prompt to send the next command
+        else if (isReady && (data.contains('#') || data.contains('>'))) {
           if (commandIndex < commands.length) {
             sendNextCommand();
           } else {
+            // All commands sent, close the shell and complete
             shell.close();
             if (!completer.isCompleted) {
               completer.complete(output.toString());
@@ -559,22 +573,23 @@ class SshClientHandler {
           }
         }
       });
-      
+
       shell.stderr.cast<List<int>>().transform(utf8.decoder).listen((data) {
         _logDebug('SSH Shell Error: $data');
         output.write(data);
       });
-      
+
+      // General timeout for the whole operation
       Timer(_commandTimeout, () {
         if (!completer.isCompleted) {
           shell.close();
-          completer.completeError(TimeoutException('SSH Shell timeout', _commandTimeout));
+          completer.completeError(TimeoutException('SSH Shell operation timed out', _commandTimeout));
         }
       });
-      
+
       return await completer.future;
     } catch (e) {
-      _logDebug('خطا در SSH Shell: $e');
+      _logDebug('Error in SSH Shell: $e');
       rethrow;
     }
   }
@@ -584,10 +599,10 @@ class SshClientHandler {
     try {
       client = await _createSshClient(credentials);
       final result = await _executeSshCommand(client, 'show ip interface brief');
-      _logDebug('Interface های SSH دریافت شدند');
+      _logDebug('SSH interfaces fetched');
       return result;
     } catch (e) {
-      _logDebug('خطا در دریافت Interface های SSH: $e');
+      _logDebug('Error fetching SSH interfaces: $e');
       rethrow;
     } finally {
       client?.close();
@@ -595,40 +610,39 @@ class SshClientHandler {
   }
 
   Future<String> fetchDetailedInterfaces(DeviceCredentials credentials) async {
-  SSHClient? client;
-  try {
-    client = await _createSshClient(credentials);
-    final result = await _executeSshCommand(client, 'show running-config');
-    _logDebug('کانفیگ تفصیلی SSH دریافت شد');
-    return result;
-  } catch (e) {
-    _logDebug('خطا در دریافت کانفیگ تفصیلی SSH: $e');
-    rethrow;
-  } finally {
-    client?.close();
+    SSHClient? client;
+    try {
+      client = await _createSshClient(credentials);
+      final result = await _executeSshCommand(client, 'show running-config');
+      _logDebug('SSH detailed config fetched');
+      return result;
+    } catch (e) {
+      _logDebug('Error fetching SSH detailed config: $e');
+      rethrow;
+    } finally {
+      client?.close();
+    }
   }
-}
 
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      
       try {
         final result = await _executeSshCommandsWithShell(
             client, ['terminal length 0', 'show ip route']);
-        _logDebug('جدول مسیریابی SSH با Shell دریافت شد');
+        _logDebug('SSH routing table fetched with Shell');
         return result;
       } catch (e) {
-        _logDebug('خطا در SSH Shell، تلاش با روش قدیمی: $e');
+        _logDebug('Error in SSH Shell, trying legacy method: $e');
         await _executeSshCommand(client, 'terminal length 0');
         await Future.delayed(_delayBetweenCommands);
         final result = await _executeSshCommand(client, 'show ip route');
-        _logDebug('جدول مسیریابی SSH با روش قدیمی دریافت شد');
+        _logDebug('SSH routing table fetched with legacy method');
         return result;
       }
     } catch (e) {
-      _logDebug('خطا در دریافت جدول مسیریابی SSH: $e');
+      _logDebug('Error fetching SSH routing table: $e');
       rethrow;
     } finally {
       client?.close();
@@ -636,14 +650,13 @@ class SshClientHandler {
   }
 
   Future<String> pingGateway(DeviceCredentials credentials, String ipAddress) async {
-    _logDebug('شروع ping SSH برای IP: $ipAddress');
-    
+    _logDebug('Starting SSH ping for IP: $ipAddress');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
       final result = await _executeSshCommand(client, 'ping $ipAddress repeat 5');
-      
-      _logDebug('نتیجه ping SSH دریافت شد');
+
+      _logDebug('SSH ping result received');
       return _analyzePingResult(result);
     } finally {
       client?.close();
@@ -651,22 +664,50 @@ class SshClientHandler {
   }
 
   String _analyzePingResult(String output) {
-    _logDebug('تحلیل نتیجه ping');
-    
-    if (output.contains('!!!!!') || 
+    _logDebug('Analyzing ping result');
+    if (output.contains('!!!!!') ||
         output.contains('Success rate is 100') ||
         output.contains('Success rate is 80')) {
-      return 'موفق! Gateway قابل دسترسی است.';
-    } else if (output.contains('.....') || 
-               output.contains('Success rate is 0')) {
-      return 'زمان به پایان رسید. Gateway قابل دسترسی نیست.';
+      return 'Success! Gateway is reachable.';
+    } else if (output.contains('.....') ||
+        output.contains('Success rate is 0')) {
+      return 'Timeout. Gateway is not reachable.';
     } else if (output.toLowerCase().contains('unknown host')) {
-      return 'خطا: Host نامعلوم است.';
+      return 'Error: Unknown host.';
     } else if (output.toLowerCase().contains('network unreachable')) {
-      return 'خطا: شبکه قابل دسترسی نیست.';
+      return 'Error: Network unreachable.';
     }
-    
-    return 'Ping ناموفق. IP یا اتصال را بررسی کنید.';
+
+    return 'Ping failed. Check the IP or connection.';
+  }
+
+  // New method to apply ECMP configuration
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
+    _logDebug('Applying ECMP config for gateways: $gateway1, $gateway2');
+    SSHClient? client;
+    try {
+      client = await _createSshClient(credentials);
+      final commands = [
+        'configure terminal',
+        'ip route 0.0.0.0 0.0.0.0 $gateway1',
+        'ip route 0.0.0.0 0.0.0.0 $gateway2',
+        'end'
+      ];
+      final result = await _executeSshCommandsWithShell(client, commands);
+      _logDebug('ECMP config commands executed');
+
+      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+          _logDebug('Error applying ECMP config: $result');
+          return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      }
+      
+      return 'ECMP configuration applied successfully.';
+    } catch (e) {
+      _logDebug('Error applying ECMP config: $e');
+      return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+    } finally {
+      client?.close();
+    }
   }
 }
 
@@ -680,7 +721,8 @@ import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:ctelnet/ctelnet.dart';
 
 class TelnetClientHandler {
-  static const _commandTimeout = Duration(seconds: 20);
+  static const _commandTimeout = Duration(seconds: 30); // Increased timeout
+  static const _connectionTimeout = Duration(seconds: 20);
 
   void _logDebug(String message) {
     if (kDebugMode) {
@@ -690,8 +732,7 @@ class TelnetClientHandler {
 
   Future<String> _executeTelnetCommands(
       DeviceCredentials credentials, List<String> commands) async {
-    _logDebug('شروع اجرای دستورات Telnet');
-    
+    _logDebug('Starting execution of Telnet commands');
     final completer = Completer<String>();
     final outputBuffer = StringBuffer();
     CTelnetClient? client;
@@ -699,26 +740,39 @@ class TelnetClientHandler {
 
     var state = 'login';
     int commandIndex = 0;
+    // Prepend 'terminal length 0' to avoid pagination
     final allCommands = ['terminal length 0', ...commands];
+    Timer? timeoutTimer;
+
+    // Setup timeout timer for the whole operation
+    timeoutTimer = Timer(_commandTimeout, () {
+      _logDebug('Telnet operation timed out');
+      if (!completer.isCompleted) {
+        client?.disconnect();
+        completer.completeError(const ServerFailure("Telnet operation timed out."));
+      }
+    });
 
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
-      timeout: Duration(seconds: 15),
+      timeout: _connectionTimeout,
       onConnect: () {
-        _logDebug('اتصال Telnet برقرار شد');
+        _logDebug('Telnet connection established');
       },
       onDisconnect: () {
-        _logDebug('اتصال Telnet قطع شد');
+        _logDebug('Telnet connection closed');
+        timeoutTimer?.cancel();
         if (!completer.isCompleted) {
           completer.complete(outputBuffer.toString());
         }
         subscription?.cancel();
       },
       onError: (error) {
-        _logDebug('خطای Telnet: $error');
+        _logDebug('Telnet error: $error');
+        timeoutTimer?.cancel();
         if (!completer.isCompleted) {
-          completer.completeError(ServerFailure("خطای Telnet: $error"));
+          completer.completeError(ServerFailure("Telnet Error: $error"));
         }
         subscription?.cancel();
       },
@@ -727,13 +781,16 @@ class TelnetClientHandler {
     void executeNextCommand() {
       if (commandIndex < allCommands.length) {
         final cmd = allCommands[commandIndex];
-        _logDebug("ارسال Telnet: $cmd");
+        _logDebug("Sending Telnet: $cmd");
         client?.send('$cmd\n');
         commandIndex++;
       } else {
-        if (!completer.isCompleted) {
-          client?.disconnect();
-        }
+        // Short delay before disconnecting to ensure all output is received
+        Timer(const Duration(seconds: 1), () {
+          if (!completer.isCompleted) {
+            client?.disconnect();
+          }
+        });
       }
     }
 
@@ -741,7 +798,7 @@ class TelnetClientHandler {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text.trim();
         outputBuffer.write(data.text);
-        _logDebug("دریافت Telnet: ${receivedText.replaceAll('\r\n', ' ')}");
+        _logDebug("Telnet Received: ${receivedText.replaceAll('\r\n', ' ')}");
 
         switch (state) {
           case 'login':
@@ -754,7 +811,7 @@ class TelnetClientHandler {
               client?.send('enable\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear();
+              outputBuffer.clear(); // Clear buffer before starting commands
               executeNextCommand();
             }
             break;
@@ -763,7 +820,7 @@ class TelnetClientHandler {
               client?.send('${credentials.enablePassword ?? ''}\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear();
+              outputBuffer.clear(); // Clear buffer before starting commands
               executeNextCommand();
             }
             break;
@@ -772,46 +829,56 @@ class TelnetClientHandler {
               if (commandIndex < allCommands.length) {
                 executeNextCommand();
               } else {
-                if (!completer.isCompleted) {
-                  client?.disconnect();
-                }
+                // Short delay before disconnecting
+                Timer(const Duration(seconds: 1), () {
+                  if (!completer.isCompleted) {
+                    client?.disconnect();
+                  }
+                });
               }
             }
             break;
         }
       });
     } catch (e) {
-      _logDebug('خطا در اتصال Telnet: $e');
+      _logDebug('Error on Telnet connect: $e');
+      timeoutTimer.cancel();
       if (!completer.isCompleted) {
-        completer.completeError(ServerFailure("اتصال Telnet ناموفق: $e"));
+        completer.completeError(ServerFailure("Telnet connection failed: $e"));
       }
     }
 
-    return completer.future.timeout(_commandTimeout, onTimeout: () {
-      _logDebug('زمان عملیات Telnet به پایان رسید');
-      client?.disconnect();
-      throw const ServerFailure("زمان عملیات Telnet به پایان رسید.");
-    });
+    return completer.future;
   }
 
   Future<String> _executeTelnetPing(
       DeviceCredentials credentials, String ipAddress) async {
-    _logDebug('شروع ping Telnet برای IP: $ipAddress');
-    
+    _logDebug('Starting Telnet ping for IP: $ipAddress');
     final completer = Completer<String>();
     CTelnetClient? client;
     StreamSubscription<Message>? subscription;
     var state = 'login';
     final outputBuffer = StringBuffer();
     bool commandSent = false;
+    Timer? timeoutTimer;
+
+    // Setup timeout timer
+    timeoutTimer = Timer(_commandTimeout, () {
+      _logDebug('Ping operation timed out');
+      if (!completer.isCompleted) {
+        client?.disconnect();
+        completer.complete('Timeout. Gateway is not reachable.');
+      }
+    });
 
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
-      timeout: Duration(seconds: 15),
-      onConnect: () => _logDebug('اتصال ping Telnet برقرار شد'),
+      timeout: _connectionTimeout,
+      onConnect: () => _logDebug('Telnet ping connection established'),
       onDisconnect: () {
-        _logDebug('اتصال ping Telnet قطع شد');
+        _logDebug('Telnet ping connection closed');
+        timeoutTimer?.cancel();
         if (!completer.isCompleted) {
           final output = outputBuffer.toString();
           final result = _analyzePingResult(output);
@@ -820,9 +887,10 @@ class TelnetClientHandler {
         subscription?.cancel();
       },
       onError: (error) {
-        _logDebug('خطای ping Telnet: $error');
+        _logDebug('Telnet ping error: $error');
+        timeoutTimer?.cancel();
         if (!completer.isCompleted) {
-          completer.completeError(ServerFailure("خطای ping: $error"));
+          completer.completeError(ServerFailure("Ping error: $error"));
         }
       },
     );
@@ -831,20 +899,23 @@ class TelnetClientHandler {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text;
         outputBuffer.write(receivedText);
-        _logDebug("دریافت ping: ${receivedText.replaceAll('\r\n', ' ')}");
+        _logDebug("Ping Received: ${receivedText.replaceAll('\r\n', ' ')}");
 
-        if (receivedText.contains('!!!!!') || 
+        // Check for ping results in every message
+        if (receivedText.contains('!!!!!') ||
             receivedText.contains('Success rate is 100') ||
             receivedText.contains('Success rate is 80')) {
           if (!completer.isCompleted) {
-            completer.complete('موفق! Gateway قابل دسترسی است.');
+            timeoutTimer?.cancel();
+            completer.complete('Success! Gateway is reachable.');
             client?.disconnect();
             return;
           }
-        } else if (receivedText.contains('.....') || 
-                   receivedText.contains('Success rate is 0')) {
+        } else if (receivedText.contains('.....') ||
+            receivedText.contains('Success rate is 0')) {
           if (!completer.isCompleted) {
-            completer.complete('زمان به پایان رسید. Gateway قابل دسترسی نیست.');
+            timeoutTimer?.cancel();
+            completer.complete('Timeout. Gateway is not reachable.');
             client?.disconnect();
             return;
           }
@@ -882,57 +953,53 @@ class TelnetClientHandler {
         }
       });
     } catch (e) {
-      _logDebug('خطا در ping Telnet: $e');
+      _logDebug('Error in Telnet ping: $e');
+      timeoutTimer.cancel();
       if (!completer.isCompleted) {
-        completer.completeError(ServerFailure("اتصال ping ناموفق: $e"));
+        completer.completeError(ServerFailure("Ping connection failed: $e"));
       }
     }
 
-    return completer.future.timeout(_commandTimeout, onTimeout: () {
-      _logDebug('زمان ping به پایان رسید');
-      client?.disconnect();
-      return 'زمان به پایان رسید. Gateway قابل دسترسی نیست.';
-    });
+    return completer.future;
   }
 
   Future<String> fetchDetailedInterfaces(DeviceCredentials credentials) async {
-  try {
-    final result = await _executeTelnetCommands(credentials, ['show running-config']);
-    _logDebug('کانفیگ تفصیلی Telnet دریافت شد');
-    return result;
-  } catch (e) {
-    _logDebug('خطا در دریافت کانفیگ تفصیلی Telnet: $e');
-    rethrow;
+    try {
+      final result = await _executeTelnetCommands(credentials, ['show running-config']);
+      _logDebug('Telnet detailed config fetched');
+      return result;
+    } catch (e) {
+      _logDebug('Error fetching Telnet detailed config: $e');
+      rethrow;
+    }
   }
-}
 
   String _analyzePingResult(String output) {
-    _logDebug('تحلیل نتیجه ping');
-    
-    if (output.contains('!!!!!') || 
+    _logDebug('Analyzing ping result');
+    if (output.contains('!!!!!') ||
         output.contains('Success rate is 100') ||
         output.contains('Success rate is 80')) {
-      return 'موفق! Gateway قابل دسترسی است.';
-    } else if (output.contains('.....') || 
-               output.contains('Success rate is 0')) {
-      return 'زمان به پایان رسید. Gateway قابل دسترسی نیست.';
+      return 'Success! Gateway is reachable.';
+    } else if (output.contains('.....') ||
+        output.contains('Success rate is 0')) {
+      return 'Timeout. Gateway is not reachable.';
     } else if (output.toLowerCase().contains('unknown host')) {
-      return 'خطا: Host نامعلوم است.';
+      return 'Error: Unknown host.';
     } else if (output.toLowerCase().contains('network unreachable')) {
-      return 'خطا: شبکه قابل دسترسی نیست.';
+      return 'Error: Network unreachable.';
     }
-    
-    return 'Ping ناموفق. IP یا اتصال را بررسی کنید.';
+
+    return 'Ping failed. Check the IP or connection.';
   }
 
   Future<String> fetchInterfaces(DeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(
           credentials, ['show ip interface brief']);
-      _logDebug('Interface های Telnet دریافت شدند');
+      _logDebug('Telnet interfaces fetched');
       return result;
     } catch (e) {
-      _logDebug('خطا در دریافت Interface های Telnet: $e');
+      _logDebug('Error fetching Telnet interfaces: $e');
       rethrow;
     }
   }
@@ -940,16 +1007,43 @@ class TelnetClientHandler {
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(credentials, ['show ip route']);
-      _logDebug('جدول مسیریابی Telnet دریافت شد');
+      _logDebug('Telnet routing table fetched');
       return result;
     } catch (e) {
-      _logDebug('خطا در دریافت جدول مسیریابی Telnet: $e');
+      _logDebug('Error fetching Telnet routing table: $e');
       rethrow;
     }
   }
 
   Future<String> pingGateway(DeviceCredentials credentials, String ipAddress) async {
     return await _executeTelnetPing(credentials, ipAddress);
+  }
+  
+  // New method to apply ECMP configuration via Telnet
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
+    _logDebug('Applying ECMP config via Telnet for gateways: $gateway1, $gateway2');
+    try {
+       final commands = [
+        'configure terminal',
+        'ip route 0.0.0.0 0.0.0.0 $gateway1',
+        'ip route 0.0.0.0 0.0.0.0 $gateway2',
+        'end'
+      ];
+      // We don't need 'terminal length 0' here, as _executeTelnetCommands adds it.
+      // We pass the commands directly.
+      final result = await _executeTelnetCommands(credentials, commands.sublist(1));
+       _logDebug('ECMP config commands sent via Telnet');
+
+      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+          _logDebug('Error applying ECMP config via Telnet: $result');
+          return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      }
+
+      return 'ECMP configuration applied successfully.';
+    } catch (e) {
+       _logDebug('Error applying ECMP config via Telnet: $e');
+       return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+    }
   }
 }
 
@@ -970,6 +1064,7 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<void> checkCredentials(DeviceCredentials credentials) async {
+    // For SSH and Telnet, verifying credentials by fetching interfaces is a reliable check.
     if (credentials.type == ConnectionType.ssh ||
         credentials.type == ConnectionType.telnet) {
       try {
@@ -1007,13 +1102,27 @@ class DeviceRepositoryImpl implements DeviceRepository {
     }
   }
 
-  // Add the pingGateway implementation back
   @override
   Future<String> pingGateway(
       {required DeviceCredentials credentials,
       required String ipAddress}) async {
     try {
       return await remoteDataSource.pingGateway(credentials, ipAddress);
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  // Implementation for the new ECMP method
+  @override
+  Future<String> applyEcmpConfig(
+      {required DeviceCredentials credentials,
+      required String gateway1,
+      required String gateway2}) async {
+    try {
+      return await remoteDataSource.applyEcmpConfig(credentials, gateway1, gateway2);
     } on ServerFailure catch (e) {
       return e.message;
     } catch (e) {
@@ -1047,19 +1156,19 @@ class DeviceCredentials extends Equatable {
     this.commandTimeout = const Duration(seconds: 20),
   });
 
-  // اعتبارسنجی داده‌ها
+  // Data validation
   bool get isValid {
     if (ip.trim().isEmpty || username.trim().isEmpty || password.trim().isEmpty) {
       return false;
     }
     
-    // بررسی فرمت IP
+    // IP format check
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip.trim())) {
       return false;
     }
     
-    // بررسی محدوده IP
+    // IP range check
     final parts = ip.trim().split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -1072,20 +1181,20 @@ class DeviceCredentials extends Equatable {
   }
 
   String? get validationError {
-    if (ip.trim().isEmpty) return 'آدرس IP نمی‌تواند خالی باشد';
-    if (username.trim().isEmpty) return 'نام کاربری نمی‌تواند خالی باشد';
-    if (password.trim().isEmpty) return 'رمز عبور نمی‌تواند خالی باشد';
+    if (ip.trim().isEmpty) return 'IP address cannot be empty';
+    if (username.trim().isEmpty) return 'Username cannot be empty';
+    if (password.trim().isEmpty) return 'Password cannot be empty';
     
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip.trim())) {
-      return 'فرمت آدرس IP نامعتبر است';
+      return 'Invalid IP address format';
     }
     
     final parts = ip.trim().split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
       if (num == null || num < 0 || num > 255) {
-        return 'آدرس IP باید در محدوده 0-255 باشد';
+        return 'IP address octets must be between 0-255';
       }
     }
     
@@ -1122,7 +1231,7 @@ class DeviceCredentials extends Equatable {
         connectionTimeout,
         commandTimeout,
       ];
-
+      
   @override
   String toString() {
     return 'DeviceCredentials(ip: $ip, username: $username, type: $type)';
@@ -1159,11 +1268,40 @@ abstract class DeviceRepository {
   Future<void> checkCredentials(DeviceCredentials credentials);
   Future<List<RouterInterface>> getInterfaces(DeviceCredentials credentials);
   Future<String> getRoutingTable(DeviceCredentials credentials);
-  // Add the pingGateway method back to the repository interface
   Future<String> pingGateway({
     required DeviceCredentials credentials,
     required String ipAddress,
   });
+  // New method to apply ECMP configuration
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required String gateway1,
+    required String gateway2,
+  });
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\apply_ecmp_config.dart ---
+
+// lib/domain/usecases/apply_ecmp_config.dart
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+
+class ApplyEcmpConfig {
+  final DeviceRepository repository;
+
+  ApplyEcmpConfig(this.repository);
+
+  Future<String> call({
+    required DeviceCredentials credentials,
+    required String gateway1,
+    required String gateway2,
+  }) async {
+    return await repository.applyEcmpConfig(
+      credentials: credentials,
+      gateway1: gateway1,
+      gateway2: gateway2,
+    );
+  }
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\check_credentials.dart ---
@@ -1227,7 +1365,7 @@ class PingGateway {
 
   PingGateway(this.repository);
 
-  // The call method now requires credentials again.
+  // The call method requires credentials to perform the operation on the device.
   Future<String> call({
     required DeviceCredentials credentials,
     required String ipAddress,
@@ -1355,6 +1493,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/get_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
@@ -1365,14 +1504,16 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
   final GetInterfaces getInterfaces;
   final GetRoutingTable getRoutingTable;
   final PingGateway pingGateway;
+  final ApplyEcmpConfig applyEcmpConfig; // New use case
 
-  // مدیریت عملیات‌های همزمان ping
+  // Manage concurrent ping operations
   final Map<String, Timer> _pingTimers = {};
 
   LoadBalancingBloc({
     required this.getInterfaces,
     required this.getRoutingTable,
     required this.pingGateway,
+    required this.applyEcmpConfig, // Injected dependency
   }) : super(const LoadBalancingState()) {
     on<ScreenStarted>(_onScreenStarted);
     on<FetchInterfacesRequested>(_onFetchInterfaces);
@@ -1385,7 +1526,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
 
   @override
   Future<void> close() {
-    // پاکسازی تایمرها
+    // Clean up timers
     for (final timer in _pingTimers.values) {
       timer.cancel();
     }
@@ -1400,7 +1541,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
   }
 
   void _onScreenStarted(ScreenStarted event, Emitter<LoadBalancingState> emit) {
-    _logDebug('صفحه شروع شد - IP: ${event.credentials.ip}');
+    _logDebug('Screen started - IP: ${event.credentials.ip}');
     emit(state.copyWith(credentials: event.credentials));
     add(FetchInterfacesRequested());
   }
@@ -1409,7 +1550,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     LoadBalancingTypeSelected event,
     Emitter<LoadBalancingState> emit,
   ) {
-    _logDebug('نوع Load Balancing انتخاب شد: ${event.type}');
+    _logDebug('Load Balancing type selected: ${event.type}');
     emit(state.copyWith(type: event.type));
   }
 
@@ -1427,33 +1568,30 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available');
       return;
     }
 
-    _logDebug('شروع دریافت Interface ها');
+    _logDebug('Starting to fetch interfaces');
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
-    
     try {
       final interfaces = await getInterfaces(state.credentials!);
-      _logDebug('${interfaces.length} Interface دریافت شد');
-      
+      _logDebug('${interfaces.length} interfaces received');
       emit(state.copyWith(
         interfaces: interfaces,
         interfacesStatus: DataStatus.success,
-        error: '',
       ));
     } on ServerFailure catch (e) {
-      _logDebug('خطا در دریافت Interface ها: ${e.message}');
+      _logDebug('Error fetching interfaces: ${e.message}');
       emit(state.copyWith(
         interfacesStatus: DataStatus.failure,
         error: e.message,
       ));
     } catch (e) {
-      _logDebug('خطای ناشناخته در دریافت Interface ها: $e');
+      _logDebug('Unknown error fetching interfaces: $e');
       emit(state.copyWith(
         interfacesStatus: DataStatus.failure,
-        error: 'خطای ناشناخته در دریافت Interface ها',
+        error: 'An unknown error occurred while fetching interfaces.',
       ));
     }
   }
@@ -1463,34 +1601,32 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available');
       return;
     }
 
-    _logDebug('شروع دریافت جدول مسیریابی');
+    _logDebug('Starting to fetch routing table');
     emit(state.copyWith(
       routingTableStatus: DataStatus.loading,
       clearRoutingTable: true,
     ));
-    
     try {
       final table = await getRoutingTable(state.credentials!);
-      _logDebug('جدول مسیریابی دریافت شد');
-      
+      _logDebug('Routing table received');
       emit(state.copyWith(
         routingTable: table,
         routingTableStatus: DataStatus.success,
       ));
     } on ServerFailure catch (e) {
-      _logDebug('خطا در دریافت جدول مسیریابی: ${e.message}');
+      _logDebug('Error fetching routing table: ${e.message}');
       emit(state.copyWith(
-        routingTable: 'خطا: ${e.message}',
+        routingTable: 'Error: ${e.message}',
         routingTableStatus: DataStatus.failure,
       ));
     } catch (e) {
-      _logDebug('خطای ناشناخته در دریافت جدول مسیریابی: $e');
+      _logDebug('Unknown error fetching routing table: $e');
       emit(state.copyWith(
-        routingTable: 'خطای ناشناخته در دریافت جدول مسیریابی',
+        routingTable: 'An unknown error occurred while fetching routing table.',
         routingTableStatus: DataStatus.failure,
       ));
     }
@@ -1501,55 +1637,41 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available');
       return;
     }
 
     final ipAddress = event.ipAddress.trim();
     
-    // اعتبارسنجی IP
+    // IP Validation
     if (ipAddress.isEmpty) {
-      _logDebug('خطا: IP خالی برای ping');
+      _logDebug('Error: Empty IP for ping');
       final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[''] = 'خطا: آدرس IP نمی‌تواند خالی باشد';
+      newPingResults[''] = 'Error: IP address cannot be empty.';
       emit(state.copyWith(pingResults: newPingResults));
       return;
     }
 
-    // بررسی اگر ping در حال انجام است
+    // Check if ping is already in progress
     if (state.pingingIp == ipAddress) {
-      _logDebug('ping برای IP $ipAddress در حال انجام است');
+      _logDebug('Ping for IP $ipAddress is already in progress');
       return;
     }
 
-    // لغو ping قبلی اگر وجود دارد
+    // Cancel previous timer if it exists
     _pingTimers[ipAddress]?.cancel();
-    
-    _logDebug('شروع ping برای IP: $ipAddress');
+    _logDebug('Starting ping for IP: $ipAddress');
     emit(state.copyWith(
       pingStatus: DataStatus.loading,
       pingingIp: ipAddress,
     ));
-
     try {
-      // تنظیم تایمر برای نمایش پیشرفت
-      _pingTimers[ipAddress] = Timer.periodic(
-        Duration(seconds: 1),
-        (timer) {
-          if (!emit.isDone && state.pingingIp == ipAddress) {
-            // می‌توان پیشرفت ping را نمایش داد
-          }
-        },
-      );
-
       final result = await pingGateway(
         credentials: state.credentials!,
         ipAddress: ipAddress,
       );
+      _logDebug('Ping result for $ipAddress: $result');
       
-      _logDebug('نتیجه ping برای $ipAddress: $result');
-      
-      // لغو تایمر
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
       
@@ -1562,14 +1684,12 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
         pingingIp: '',
       ));
     } catch (e) {
-      _logDebug('خطا در ping برای $ipAddress: $e');
-      
-      // لغو تایمر
+      _logDebug('Error during ping for $ipAddress: $e');
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
       
       final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[ipAddress] = 'خطا در ping: ${e.toString()}';
+      newPingResults[ipAddress] = 'Ping Error: ${e.toString()}';
       
       emit(state.copyWith(
         pingResults: newPingResults,
@@ -1579,37 +1699,49 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     }
   }
 
+  // Updated handler for applying ECMP configuration
   Future<void> _onApplyEcmpConfig(
     ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available for applying config');
       return;
     }
 
-    _logDebug('شروع اعمال تنظیمات ECMP');
+    _logDebug('Starting to apply ECMP config');
     _logDebug('Gateway 1: ${event.gateway1}');
     _logDebug('Gateway 2: ${event.gateway2}');
     
-    emit(state.copyWith(status: DataStatus.loading));
+    // Set loading state and clear any previous success/error messages
+    emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
     
     try {
-      // پیاده‌سازی اعمال تنظیمات ECMP
-      // این بخش بر اساس نیازهای خاص شما پیاده‌سازی خواهد شد
+      final result = await applyEcmpConfig(
+        credentials: state.credentials!,
+        gateway1: event.gateway1,
+        gateway2: event.gateway2,
+      );
+
+      _logDebug('ECMP config apply result: $result');
       
-      await Future.delayed(Duration(seconds: 2)); // شبیه‌سازی عملیات
-      
-      _logDebug('تنظیمات ECMP با موفقیت اعمال شد');
-      emit(state.copyWith(
-        status: DataStatus.success,
-        error: '',
-      ));
+      // Check result message for success or failure keywords
+      if (result.toLowerCase().contains('fail') || result.toLowerCase().contains('error')) {
+         emit(state.copyWith(
+            status: DataStatus.failure,
+            error: result,
+          ));
+      } else {
+         emit(state.copyWith(
+            status: DataStatus.success,
+            successMessage: result,
+          ));
+      }
     } catch (e) {
-      _logDebug('خطا در اعمال تنظیمات ECMP: $e');
+      _logDebug('Error applying ECMP config: $e');
       emit(state.copyWith(
         status: DataStatus.failure,
-        error: 'خطا در اعمال تنظیمات: ${e.toString()}',
+        error: 'Failed to apply config: ${e.toString()}',
       ));
     }
   }
@@ -1687,10 +1819,14 @@ enum LoadBalancingType { ecmp, pbr }
 enum DataStatus { initial, loading, success, failure }
 
 class LoadBalancingState extends Equatable {
-  final DeviceCredentials? credentials; // Holds the credentials to be used for each request
+  // Holds the credentials to be used for each request
+  final DeviceCredentials? credentials; 
   final LoadBalancingType type;
-  final DataStatus status;
+  // General status for operations like applying configs
+  final DataStatus status; 
   final String error;
+  // Specific message for successful operations
+  final String? successMessage; 
 
   final List<RouterInterface> interfaces;
   final DataStatus interfacesStatus;
@@ -1707,6 +1843,7 @@ class LoadBalancingState extends Equatable {
     this.type = LoadBalancingType.ecmp,
     this.status = DataStatus.initial,
     this.error = '',
+    this.successMessage,
     this.interfaces = const [],
     this.interfacesStatus = DataStatus.initial,
     this.routingTable,
@@ -1721,6 +1858,8 @@ class LoadBalancingState extends Equatable {
     LoadBalancingType? type,
     DataStatus? status,
     String? error,
+    String? successMessage,
+    bool clearSuccessMessage = false,
     List<RouterInterface>? interfaces,
     DataStatus? interfacesStatus,
     String? routingTable,
@@ -1734,7 +1873,10 @@ class LoadBalancingState extends Equatable {
       credentials: credentials ?? this.credentials,
       type: type ?? this.type,
       status: status ?? this.status,
-      error: error ?? this.error,
+      // Clear error on new status, unless it's a failure status
+      error: (status != null && status != DataStatus.failure) ? '' : error ?? this.error,
+      // Handle clearing or setting the success message
+      successMessage: clearSuccessMessage ? null : successMessage ?? this.successMessage,
       interfaces: interfaces ?? this.interfaces,
       interfacesStatus: interfacesStatus ?? this.interfacesStatus,
       routingTable: clearRoutingTable ? null : routingTable ?? this.routingTable,
@@ -1747,7 +1889,7 @@ class LoadBalancingState extends Equatable {
 
   @override
   List<Object?> get props => [
-        credentials, type, status, error, interfaces, interfacesStatus,
+        credentials, type, status, error, successMessage, interfaces, interfacesStatus,
         routingTable, routingTableStatus, pingResults, pingStatus, pingingIp
       ];
 }
@@ -1951,7 +2093,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                       }
                       return ElevatedButton.icon(
                         icon: const Icon(Icons.login),
-                        label: const Text('Check Credential'),
+                        label: const Text('Check Credentials'),
                         onPressed: _checkCredentials,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1998,12 +2140,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
     context.read<LoadBalancingBloc>().add(ScreenStarted(widget.credentials));
   }
 
-  // The dispose method is no longer needed to manage the connection.
-  @override
-  void dispose() {
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -2011,17 +2147,19 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
         title: const Text('Load Balancing Configuration'),
       ),
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
+        // Listen for general status changes (e.g., after applying config)
+        listenWhen: (previous, current) => previous.status != current.status,
         listener: (context, state) {
-          if (state.status == DataStatus.success) {
+          if (state.status == DataStatus.success && state.successMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
-                const SnackBar(
-                  content: Text('Configuration Applied Successfully!'),
+                SnackBar(
+                  content: Text(state.successMessage!),
                   backgroundColor: Colors.green,
                 ),
               );
-          } else if (state.status == DataStatus.failure) {
+          } else if (state.status == DataStatus.failure && state.error.isNotEmpty) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -2094,7 +2232,6 @@ class _RouterInfoSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<LoadBalancingBloc>().state;
-
     return Card(
       clipBehavior: Clip.antiAlias,
       child: ExpansionTile(
@@ -2183,7 +2320,6 @@ class _RouterInfoSection extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Refresh Routing Table',
-                  // FIX: The button is enabled as long as we have credentials.
                   onPressed: state.credentials == null
                       ? null
                       : () {
@@ -2244,7 +2380,6 @@ class _EcmpFormState extends State<EcmpForm> {
   final _formKey = GlobalKey<FormState>();
   final _gateway1Controller = TextEditingController();
   final _gateway2Controller = TextEditingController();
-
   // IP validation regex
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
 
@@ -2257,7 +2392,7 @@ class _EcmpFormState extends State<EcmpForm> {
 
   bool _isValidIp(String ip) {
     if (!_ipRegex.hasMatch(ip)) return false;
-    
+
     final parts = ip.split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -2289,27 +2424,27 @@ class _EcmpFormState extends State<EcmpForm> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'تنظیمات ECMP',
+                'ECMP Settings',
                 style: Theme.of(context).textTheme.headlineSmall,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
               Text(
-                'آدرس IP گیت‌وی‌های اینترنت خود را وارد کنید. ترافیک به طور مساوی بین دو گیت‌وی توزیع خواهد شد.',
+                'Enter the IP addresses of your internet gateways. Traffic will be distributed equally between them.',
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
               _GatewayInputField(
                 controller: _gateway1Controller,
-                label: 'گیت‌وی ۱',
-                hint: '192.168.1.1',
+                label: 'Gateway 1',
+                hint: 'e.g., 192.168.1.1',
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
-                    return 'آدرس IP گیت‌وی ۱ الزامی است';
+                    return 'Gateway 1 IP address is required';
                   }
                   if (!_isValidIp(value.trim())) {
-                    return 'فرمت آدرس IP نامعتبر است';
+                    return 'Invalid IP address format';
                   }
                   return null;
                 },
@@ -2317,17 +2452,17 @@ class _EcmpFormState extends State<EcmpForm> {
               const SizedBox(height: 16),
               _GatewayInputField(
                 controller: _gateway2Controller,
-                label: 'گیت‌وی ۲',
-                hint: '192.168.2.1',
+                label: 'Gateway 2',
+                hint: 'e.g., 192.168.2.1',
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
-                    return 'آدرس IP گیت‌وی ۲ الزامی است';
+                    return 'Gateway 2 IP address is required';
                   }
                   if (!_isValidIp(value.trim())) {
-                    return 'فرمت آدرس IP نامعتبر است';
+                    return 'Invalid IP address format';
                   }
                   if (value.trim() == _gateway1Controller.text.trim()) {
-                    return 'گیت‌وی ۲ نمی‌تواند مشابه گیت‌وی ۱ باشد';
+                    return 'Gateway 2 cannot be the same as Gateway 1';
                   }
                   return null;
                 },
@@ -2341,7 +2476,7 @@ class _EcmpFormState extends State<EcmpForm> {
                   return ElevatedButton.icon(
                     onPressed: _applyEcmpConfig,
                     icon: const Icon(Icons.settings),
-                    label: const Text('اعمال تنظیمات'),
+                    label: const Text('Apply Settings'),
                   );
                 },
               ),
@@ -2353,27 +2488,25 @@ class _EcmpFormState extends State<EcmpForm> {
   }
 }
 
-// بهبود _GatewayInputField برای جلوگیری از ping با IP خالی
+// Improved _GatewayInputField to prevent pinging with an empty IP
 class _GatewayInputField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
   final String hint;
   final String? Function(String?)? validator;
-
   const _GatewayInputField({
     required this.controller,
     required this.label,
     required this.hint,
     this.validator,
   });
-
   // IP validation regex
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
 
   bool _isValidIp(String ip) {
     if (ip.trim().isEmpty) return false;
     if (!_ipRegex.hasMatch(ip.trim())) return false;
-    
+
     final parts = ip.trim().split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -2412,10 +2545,9 @@ class _GatewayInputField extends StatelessWidget {
                       )
                     : IconButton(
                         icon: const Icon(Icons.network_ping),
-                        tooltip: canPing ? 'تست اتصال' : 'IP معتبر وارد کنید',
+                        tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
                         onPressed: canPing
                             ? () {
-                                debugPrint('--- PING BUTTON PRESSED for IP: ${controller.text.trim()} ---');
                                 context
                                     .read<LoadBalancingBloc>()
                                     .add(PingGatewayRequested(controller.text.trim()));
@@ -2424,9 +2556,8 @@ class _GatewayInputField extends StatelessWidget {
                       ),
               ),
               onChanged: (value) {
-                // برای به‌روزرسانی حالت دکمه ping
+                // Trigger a rebuild to update the ping button's enabled state
                 if (context.mounted) {
-                  // Trigger rebuild without dispatching unnecessary events
                   (context as Element).markNeedsBuild();
                 }
               },
@@ -2436,12 +2567,12 @@ class _GatewayInputField extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: pingResult.contains('موفق') 
-                      ? Colors.green.withOpacity(0.1)
-                      : Colors.orange.withOpacity(0.1),
+                  color: pingResult.toLowerCase().contains('success')
+                      ? Colors.green.withAlpha((.1 * 255).round())
+                      : Colors.orange.withAlpha((.1 * 255).round()),
                   border: Border.all(
-                    color: pingResult.contains('موفق') 
-                        ? Colors.green 
+                    color: pingResult.toLowerCase().contains('success')
+                        ? Colors.green
                         : Colors.orange,
                   ),
                   borderRadius: BorderRadius.circular(8),
@@ -2449,12 +2580,12 @@ class _GatewayInputField extends StatelessWidget {
                 child: Row(
                   children: [
                     Icon(
-                      pingResult.contains('موفق') 
-                          ? Icons.check_circle 
+                      pingResult.toLowerCase().contains('success')
+                          ? Icons.check_circle
                           : Icons.warning,
                       size: 16,
-                      color: pingResult.contains('موفق') 
-                          ? Colors.green 
+                      color: pingResult.toLowerCase().contains('success')
+                          ? Colors.green
                           : Colors.orange,
                     ),
                     const SizedBox(width: 8),
@@ -2463,8 +2594,8 @@ class _GatewayInputField extends StatelessWidget {
                         pingResult,
                         style: TextStyle(
                           fontSize: 12,
-                          color: pingResult.contains('موفق') 
-                              ? Colors.green.shade700 
+                          color: pingResult.toLowerCase().contains('success')
+                              ? Colors.green.shade700
                               : Colors.orange.shade700,
                         ),
                       ),
@@ -2476,7 +2607,7 @@ class _GatewayInputField extends StatelessWidget {
                             .read<LoadBalancingBloc>()
                             .add(ClearPingResult(ipAddress));
                       },
-                      tooltip: 'پاک کردن نتیجه',
+                      tooltip: 'Clear Result',
                     ),
                   ],
                 ),
@@ -2491,13 +2622,11 @@ class _GatewayInputField extends StatelessWidget {
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\widgets\pbr_form.dart ---
 
-
 // presentation/screens/load_balancing/widgets/pbr_form.dart
 import 'package:flutter/material.dart';
 
 class PbrForm extends StatefulWidget {
   const PbrForm({super.key});
-
   @override
   State<PbrForm> createState() => _PbrFormState();
 }

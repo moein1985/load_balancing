@@ -6,7 +6,7 @@ import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:ctelnet/ctelnet.dart';
 
 class TelnetClientHandler {
-  static const _commandTimeout = Duration(seconds: 30); // افزایش timeout
+  static const _commandTimeout = Duration(seconds: 30); // Increased timeout
   static const _connectionTimeout = Duration(seconds: 20);
 
   void _logDebug(String message) {
@@ -17,8 +17,7 @@ class TelnetClientHandler {
 
   Future<String> _executeTelnetCommands(
       DeviceCredentials credentials, List<String> commands) async {
-    _logDebug('شروع اجرای دستورات Telnet');
-
+    _logDebug('Starting execution of Telnet commands');
     final completer = Completer<String>();
     final outputBuffer = StringBuffer();
     CTelnetClient? client;
@@ -26,15 +25,16 @@ class TelnetClientHandler {
 
     var state = 'login';
     int commandIndex = 0;
+    // Prepend 'terminal length 0' to avoid pagination
     final allCommands = ['terminal length 0', ...commands];
     Timer? timeoutTimer;
 
-    // تنظیم timeout timer
+    // Setup timeout timer for the whole operation
     timeoutTimer = Timer(_commandTimeout, () {
-      _logDebug('زمان عملیات Telnet به پایان رسید');
+      _logDebug('Telnet operation timed out');
       if (!completer.isCompleted) {
         client?.disconnect();
-        completer.completeError(const ServerFailure("زمان عملیات Telnet به پایان رسید."));
+        completer.completeError(const ServerFailure("Telnet operation timed out."));
       }
     });
 
@@ -43,10 +43,10 @@ class TelnetClientHandler {
       port: 23,
       timeout: _connectionTimeout,
       onConnect: () {
-        _logDebug('اتصال Telnet برقرار شد');
+        _logDebug('Telnet connection established');
       },
       onDisconnect: () {
-        _logDebug('اتصال Telnet قطع شد');
+        _logDebug('Telnet connection closed');
         timeoutTimer?.cancel();
         if (!completer.isCompleted) {
           completer.complete(outputBuffer.toString());
@@ -54,10 +54,10 @@ class TelnetClientHandler {
         subscription?.cancel();
       },
       onError: (error) {
-        _logDebug('خطای Telnet: $error');
+        _logDebug('Telnet error: $error');
         timeoutTimer?.cancel();
         if (!completer.isCompleted) {
-          completer.completeError(ServerFailure("خطای Telnet: $error"));
+          completer.completeError(ServerFailure("Telnet Error: $error"));
         }
         subscription?.cancel();
       },
@@ -66,12 +66,12 @@ class TelnetClientHandler {
     void executeNextCommand() {
       if (commandIndex < allCommands.length) {
         final cmd = allCommands[commandIndex];
-        _logDebug("ارسال Telnet: $cmd");
+        _logDebug("Sending Telnet: $cmd");
         client?.send('$cmd\n');
         commandIndex++;
       } else {
-        // تأخیر کوتاه قبل از قطع اتصال
-        Timer(Duration(seconds: 1), () {
+        // Short delay before disconnecting to ensure all output is received
+        Timer(const Duration(seconds: 1), () {
           if (!completer.isCompleted) {
             client?.disconnect();
           }
@@ -83,7 +83,7 @@ class TelnetClientHandler {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text.trim();
         outputBuffer.write(data.text);
-        _logDebug("دریافت Telnet: ${receivedText.replaceAll('\r\n', ' ')}");
+        _logDebug("Telnet Received: ${receivedText.replaceAll('\r\n', ' ')}");
 
         switch (state) {
           case 'login':
@@ -96,7 +96,7 @@ class TelnetClientHandler {
               client?.send('enable\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear(); // پاک کردن بافر قبل از شروع دستورات
+              outputBuffer.clear(); // Clear buffer before starting commands
               executeNextCommand();
             }
             break;
@@ -105,7 +105,7 @@ class TelnetClientHandler {
               client?.send('${credentials.enablePassword ?? ''}\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear(); // پاک کردن بافر قبل از شروع دستورات
+              outputBuffer.clear(); // Clear buffer before starting commands
               executeNextCommand();
             }
             break;
@@ -114,8 +114,8 @@ class TelnetClientHandler {
               if (commandIndex < allCommands.length) {
                 executeNextCommand();
               } else {
-                // تأخیر کوتاه قبل از قطع اتصال
-                Timer(Duration(seconds: 1), () {
+                // Short delay before disconnecting
+                Timer(const Duration(seconds: 1), () {
                   if (!completer.isCompleted) {
                     client?.disconnect();
                   }
@@ -126,10 +126,10 @@ class TelnetClientHandler {
         }
       });
     } catch (e) {
-      _logDebug('خطا در اتصال Telnet: $e');
+      _logDebug('Error on Telnet connect: $e');
       timeoutTimer.cancel();
       if (!completer.isCompleted) {
-        completer.completeError(ServerFailure("اتصال Telnet ناموفق: $e"));
+        completer.completeError(ServerFailure("Telnet connection failed: $e"));
       }
     }
 
@@ -138,8 +138,7 @@ class TelnetClientHandler {
 
   Future<String> _executeTelnetPing(
       DeviceCredentials credentials, String ipAddress) async {
-    _logDebug('شروع ping Telnet برای IP: $ipAddress');
-
+    _logDebug('Starting Telnet ping for IP: $ipAddress');
     final completer = Completer<String>();
     CTelnetClient? client;
     StreamSubscription<Message>? subscription;
@@ -148,12 +147,12 @@ class TelnetClientHandler {
     bool commandSent = false;
     Timer? timeoutTimer;
 
-    // تنظیم timeout timer
+    // Setup timeout timer
     timeoutTimer = Timer(_commandTimeout, () {
-      _logDebug('زمان ping به پایان رسید');
+      _logDebug('Ping operation timed out');
       if (!completer.isCompleted) {
         client?.disconnect();
-        completer.complete('زمان به پایان رسید. Gateway قابل دسترسی نیست.');
+        completer.complete('Timeout. Gateway is not reachable.');
       }
     });
 
@@ -161,9 +160,9 @@ class TelnetClientHandler {
       host: credentials.ip,
       port: 23,
       timeout: _connectionTimeout,
-      onConnect: () => _logDebug('اتصال ping Telnet برقرار شد'),
+      onConnect: () => _logDebug('Telnet ping connection established'),
       onDisconnect: () {
-        _logDebug('اتصال ping Telnet قطع شد');
+        _logDebug('Telnet ping connection closed');
         timeoutTimer?.cancel();
         if (!completer.isCompleted) {
           final output = outputBuffer.toString();
@@ -173,10 +172,10 @@ class TelnetClientHandler {
         subscription?.cancel();
       },
       onError: (error) {
-        _logDebug('خطای ping Telnet: $error');
+        _logDebug('Telnet ping error: $error');
         timeoutTimer?.cancel();
         if (!completer.isCompleted) {
-          completer.completeError(ServerFailure("خطای ping: $error"));
+          completer.completeError(ServerFailure("Ping error: $error"));
         }
       },
     );
@@ -185,23 +184,23 @@ class TelnetClientHandler {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text;
         outputBuffer.write(receivedText);
-        _logDebug("دریافت ping: ${receivedText.replaceAll('\r\n', ' ')}");
+        _logDebug("Ping Received: ${receivedText.replaceAll('\r\n', ' ')}");
 
-        // بررسی نتایج ping در هر پیام دریافتی
+        // Check for ping results in every message
         if (receivedText.contains('!!!!!') ||
             receivedText.contains('Success rate is 100') ||
             receivedText.contains('Success rate is 80')) {
           if (!completer.isCompleted) {
             timeoutTimer?.cancel();
-            completer.complete('موفق! Gateway قابل دسترسی است.');
+            completer.complete('Success! Gateway is reachable.');
             client?.disconnect();
             return;
           }
         } else if (receivedText.contains('.....') ||
-                   receivedText.contains('Success rate is 0')) {
+            receivedText.contains('Success rate is 0')) {
           if (!completer.isCompleted) {
             timeoutTimer?.cancel();
-            completer.complete('زمان به پایان رسید. Gateway قابل دسترسی نیست.');
+            completer.complete('Timeout. Gateway is not reachable.');
             client?.disconnect();
             return;
           }
@@ -239,10 +238,10 @@ class TelnetClientHandler {
         }
       });
     } catch (e) {
-      _logDebug('خطا در ping Telnet: $e');
+      _logDebug('Error in Telnet ping: $e');
       timeoutTimer.cancel();
       if (!completer.isCompleted) {
-        completer.completeError(ServerFailure("اتصال ping ناموفق: $e"));
+        completer.completeError(ServerFailure("Ping connection failed: $e"));
       }
     }
 
@@ -252,41 +251,40 @@ class TelnetClientHandler {
   Future<String> fetchDetailedInterfaces(DeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(credentials, ['show running-config']);
-      _logDebug('کانفیگ تفصیلی Telnet دریافت شد');
+      _logDebug('Telnet detailed config fetched');
       return result;
     } catch (e) {
-      _logDebug('خطا در دریافت کانفیگ تفصیلی Telnet: $e');
+      _logDebug('Error fetching Telnet detailed config: $e');
       rethrow;
     }
   }
 
   String _analyzePingResult(String output) {
-    _logDebug('تحلیل نتیجه ping');
-
+    _logDebug('Analyzing ping result');
     if (output.contains('!!!!!') ||
         output.contains('Success rate is 100') ||
         output.contains('Success rate is 80')) {
-      return 'موفق! Gateway قابل دسترسی است.';
+      return 'Success! Gateway is reachable.';
     } else if (output.contains('.....') ||
-               output.contains('Success rate is 0')) {
-      return 'زمان به پایان رسید. Gateway قابل دسترسی نیست.';
+        output.contains('Success rate is 0')) {
+      return 'Timeout. Gateway is not reachable.';
     } else if (output.toLowerCase().contains('unknown host')) {
-      return 'خطا: Host نامعلوم است.';
+      return 'Error: Unknown host.';
     } else if (output.toLowerCase().contains('network unreachable')) {
-      return 'خطا: شبکه قابل دسترسی نیست.';
+      return 'Error: Network unreachable.';
     }
 
-    return 'Ping ناموفق. IP یا اتصال را بررسی کنید.';
+    return 'Ping failed. Check the IP or connection.';
   }
 
   Future<String> fetchInterfaces(DeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(
           credentials, ['show ip interface brief']);
-      _logDebug('Interface های Telnet دریافت شدند');
+      _logDebug('Telnet interfaces fetched');
       return result;
     } catch (e) {
-      _logDebug('خطا در دریافت Interface های Telnet: $e');
+      _logDebug('Error fetching Telnet interfaces: $e');
       rethrow;
     }
   }
@@ -294,15 +292,42 @@ class TelnetClientHandler {
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(credentials, ['show ip route']);
-      _logDebug('جدول مسیریابی Telnet دریافت شد');
+      _logDebug('Telnet routing table fetched');
       return result;
     } catch (e) {
-      _logDebug('خطا در دریافت جدول مسیریابی Telnet: $e');
+      _logDebug('Error fetching Telnet routing table: $e');
       rethrow;
     }
   }
 
   Future<String> pingGateway(DeviceCredentials credentials, String ipAddress) async {
     return await _executeTelnetPing(credentials, ipAddress);
+  }
+  
+  // New method to apply ECMP configuration via Telnet
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
+    _logDebug('Applying ECMP config via Telnet for gateways: $gateway1, $gateway2');
+    try {
+       final commands = [
+        'configure terminal',
+        'ip route 0.0.0.0 0.0.0.0 $gateway1',
+        'ip route 0.0.0.0 0.0.0.0 $gateway2',
+        'end'
+      ];
+      // We don't need 'terminal length 0' here, as _executeTelnetCommands adds it.
+      // We pass the commands directly.
+      final result = await _executeTelnetCommands(credentials, commands.sublist(1));
+       _logDebug('ECMP config commands sent via Telnet');
+
+      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+          _logDebug('Error applying ECMP config via Telnet: $result');
+          return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      }
+
+      return 'ECMP configuration applied successfully.';
+    } catch (e) {
+       _logDebug('Error applying ECMP config via Telnet: $e');
+       return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+    }
   }
 }

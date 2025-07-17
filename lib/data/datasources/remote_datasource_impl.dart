@@ -24,11 +24,10 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   @override
   Future<List<RouterInterface>> fetchInterfaces(
       DeviceCredentials credentials) async {
-    _logDebug('دریافت لیست Interface ها - ${credentials.type}');
-    
+    _logDebug('Fetching interface list - ${credentials.type}');
     String briefResult;
     String detailedResult;
-    
+
     if (credentials.type == ConnectionType.ssh) {
       briefResult = await _sshHandler.fetchInterfaces(credentials);
       detailedResult = await _sshHandler.fetchDetailedInterfaces(credentials);
@@ -45,14 +44,14 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final briefLines = briefResult.split('\n');
     final briefRegex = RegExp(
         r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)');
-
-    // ابتدا اینترفیس‌های اصلی را از brief پیدا کنیم
+    
+    // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
       final match = briefRegex.firstMatch(line);
       if (match != null && match.group(2) != 'unassigned') {
         final interfaceName = match.group(1)!;
-        // NVI0 را نادیده بگیر چون مجازی است
+        // Ignore NVI0 as it's a virtual interface
         if (!interfaceName.startsWith('NVI')) {
           mainInterfaces.add({
             'name': interfaceName,
@@ -63,23 +62,23 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       }
     }
 
-    // سپس آدرس‌های ثانویه را از detailed config پیدا کنیم
+    // Then, find secondary addresses from the detailed config
     final secondaryIps = _extractSecondaryIps(detailedResult);
-
-    // اینترفیس‌ها را بسازیم
+    
+    // Build the final interface list
     for (final interface in mainInterfaces) {
       final interfaceName = interface['name']!;
       final primaryIp = interface['primaryIp']!;
       final status = interface['status']!;
-      
-      // آدرس اصلی را اضافه کن
+
+      // Add the primary address
       interfaces.add(RouterInterface(
         name: interfaceName,
         ipAddress: primaryIp,
         status: status,
       ));
       
-      // آدرس‌های ثانویه را اضافه کن
+      // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
         interfaces.add(RouterInterface(
@@ -89,8 +88,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         ));
       }
     }
-    
-    _logDebug('${interfaces.length} Interface پردازش شد');
+
+    _logDebug('${interfaces.length} interfaces processed');
     return interfaces;
   }
 
@@ -98,17 +97,16 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final secondaryIps = <String, List<String>>{};
     final lines = configOutput.split('\n');
     String? currentInterface;
-    
+
     for (final line in lines) {
       final trimmedLine = line.trim();
-      
-      // پیدا کردن شروع تنظیمات اینترفیس
+      // Find the start of an interface configuration
       if (trimmedLine.startsWith('interface ')) {
         currentInterface = trimmedLine.split(' ')[1];
         secondaryIps[currentInterface] = [];
       }
-      
-      // پیدا کردن آدرس‌های IP ثانویه
+
+      // Find secondary IP addresses
       if (currentInterface != null && trimmedLine.contains('ip address') && trimmedLine.contains('secondary')) {
         final parts = trimmedLine.split(' ');
         if (parts.length >= 4) {
@@ -119,16 +117,15 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         }
       }
     }
-    
+
     return secondaryIps;
   }
 
   @override
   Future<String> getRoutingTable(DeviceCredentials credentials) async {
-    _logDebug('دریافت جدول مسیریابی - ${credentials.type}');
+    _logDebug('Fetching routing table - ${credentials.type}');
 
     String rawResult;
-    
     if (credentials.type == ConnectionType.ssh) {
       rawResult = await _sshHandler.getRoutingTable(credentials);
     } else {
@@ -139,22 +136,19 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   String _cleanRoutingTableOutput(String rawResult) {
-    _logDebug('تمیز کردن خروجی جدول مسیریابی، طول ورودی: ${rawResult.length}');
-
+    _logDebug('Cleaning routing table output, input length: ${rawResult.length}');
     final lines = rawResult.split('\n');
     final cleanLines = <String>[];
     bool routeStarted = false;
-
     for (final line in lines) {
       final trimmedLine = line.trim();
-      
-      // شروع جدول مسیریابی
+      // Start of the routing table
       if (trimmedLine.startsWith('Codes:') ||
           trimmedLine.startsWith('Gateway of last resort')) {
         routeStarted = true;
       }
 
-      // پایان جدول مسیریابی
+      // End of the routing table (prompt)
       if (routeStarted && (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
         break;
       }
@@ -165,21 +159,20 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     }
 
     final result = cleanLines.join('\n').trim();
-    _logDebug('جدول مسیریابی تمیز شد، طول: ${result.length}');
+    _logDebug('Routing table cleaned, length: ${result.length}');
     return result;
   }
 
   @override
   Future<String> pingGateway(
       DeviceCredentials credentials, String ipAddress) async {
-    _logDebug('شروع ping برای IP: $ipAddress - ${credentials.type}');
-
+    _logDebug('Starting ping for IP: $ipAddress - ${credentials.type}');
     if (ipAddress.trim().isEmpty) {
-      return 'خطا: آدرس IP نمی‌تواند خالی باشد.';
+      return 'Error: IP address cannot be empty.';
     }
 
     if (!_isValidIpAddress(ipAddress.trim())) {
-      return 'خطا: فرمت آدرس IP نامعتبر است.';
+      return 'Error: Invalid IP address format.';
     }
 
     final cleanIp = ipAddress.trim();
@@ -191,18 +184,17 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         return await _telnetHandler.pingGateway(credentials, cleanIp);
       }
     } catch (e) {
-      _logDebug('خطا در ping: $e');
+      _logDebug('Error in ping: $e');
       if (e is ServerFailure) {
-        return 'خطا: ${e.message}';
+        return 'Error: ${e.message}';
       }
-      return 'خطا در ping: ${e.toString()}';
+      return 'Error in ping: ${e.toString()}';
     }
   }
 
   bool _isValidIpAddress(String ip) {
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip)) return false;
-
     final parts = ip.split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -213,7 +205,28 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
-    _logDebug('بررسی اعتبار REST API');
+    _logDebug('Checking REST API credentials');
     return await _restApiHandler.checkCredentials(credentials);
+  }
+
+  // Implementation for the new ECMP method
+  @override
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
+    _logDebug('Applying ECMP config - ${credentials.type}');
+    try {
+       if (credentials.type == ConnectionType.ssh) {
+        return await _sshHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+      } else if (credentials.type == ConnectionType.telnet) {
+        return await _telnetHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+      } else {
+        return 'Configuration via REST API is not yet supported.';
+      }
+    } on ServerFailure catch (e) {
+      _logDebug('ServerFailure applying ECMP config: ${e.message}');
+      return e.message;
+    } catch (e) {
+      _logDebug('Unknown error applying ECMP config: ${e.toString()}');
+      return 'An unknown error occurred: ${e.toString()}';
+    }
   }
 }

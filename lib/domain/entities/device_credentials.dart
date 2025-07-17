@@ -21,19 +21,19 @@ class DeviceCredentials extends Equatable {
     this.commandTimeout = const Duration(seconds: 20),
   });
 
-  // اعتبارسنجی داده‌ها
+  // Data validation
   bool get isValid {
     if (ip.trim().isEmpty || username.trim().isEmpty || password.trim().isEmpty) {
       return false;
     }
     
-    // بررسی فرمت IP
+    // IP format check
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip.trim())) {
       return false;
     }
     
-    // بررسی محدوده IP
+    // IP range check
     final parts = ip.trim().split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -46,20 +46,20 @@ class DeviceCredentials extends Equatable {
   }
 
   String? get validationError {
-    if (ip.trim().isEmpty) return 'آدرس IP نمی‌تواند خالی باشد';
-    if (username.trim().isEmpty) return 'نام کاربری نمی‌تواند خالی باشد';
-    if (password.trim().isEmpty) return 'رمز عبور نمی‌تواند خالی باشد';
+    if (ip.trim().isEmpty) return 'IP address cannot be empty';
+    if (username.trim().isEmpty) return 'Username cannot be empty';
+    if (password.trim().isEmpty) return 'Password cannot be empty';
     
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip.trim())) {
-      return 'فرمت آدرس IP نامعتبر است';
+      return 'Invalid IP address format';
     }
     
     final parts = ip.trim().split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
       if (num == null || num < 0 || num > 255) {
-        return 'آدرس IP باید در محدوده 0-255 باشد';
+        return 'IP address octets must be between 0-255';
       }
     }
     
@@ -96,7 +96,7 @@ class DeviceCredentials extends Equatable {
         connectionTimeout,
         commandTimeout,
       ];
-
+      
   @override
   String toString() {
     return 'DeviceCredentials(ip: $ip, username: $username, type: $type)';

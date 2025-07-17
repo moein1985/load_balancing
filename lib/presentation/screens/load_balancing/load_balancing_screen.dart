@@ -24,12 +24,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
     context.read<LoadBalancingBloc>().add(ScreenStarted(widget.credentials));
   }
 
-  // The dispose method is no longer needed to manage the connection.
-  @override
-  void dispose() {
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -37,17 +31,19 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
         title: const Text('Load Balancing Configuration'),
       ),
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
+        // Listen for general status changes (e.g., after applying config)
+        listenWhen: (previous, current) => previous.status != current.status,
         listener: (context, state) {
-          if (state.status == DataStatus.success) {
+          if (state.status == DataStatus.success && state.successMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
-                const SnackBar(
-                  content: Text('Configuration Applied Successfully!'),
+                SnackBar(
+                  content: Text(state.successMessage!),
                   backgroundColor: Colors.green,
                 ),
               );
-          } else if (state.status == DataStatus.failure) {
+          } else if (state.status == DataStatus.failure && state.error.isNotEmpty) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -120,7 +116,6 @@ class _RouterInfoSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<LoadBalancingBloc>().state;
-
     return Card(
       clipBehavior: Clip.antiAlias,
       child: ExpansionTile(
@@ -209,7 +204,6 @@ class _RouterInfoSection extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Refresh Routing Table',
-                  // FIX: The button is enabled as long as we have credentials.
                   onPressed: state.credentials == null
                       ? null
                       : () {

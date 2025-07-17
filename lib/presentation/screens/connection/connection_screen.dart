@@ -195,7 +195,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                       }
                       return ElevatedButton.icon(
                         icon: const Icon(Icons.login),
-                        label: const Text('Check Credential'),
+                        label: const Text('Check Credentials'),
                         onPressed: _checkCredentials,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 16),

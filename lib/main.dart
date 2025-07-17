@@ -5,6 +5,7 @@ import 'package:load_balance/core/router/app_router.dart';
 import 'package:load_balance/data/datasources/remote_datasource_impl.dart';
 import 'package:load_balance/data/repositories/device_repository_impl.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/check_credentials.dart';
 import 'package:load_balance/domain/usecases/get_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_routing_table.dart';
@@ -38,8 +39,9 @@ class MyApp extends StatelessWidget {
               return LoadBalancingBloc(
                 getInterfaces: GetInterfaces(repository),
                 getRoutingTable: GetRoutingTable(repository),
-                // The PingGateway use case now correctly depends on the repository
                 pingGateway: PingGateway(repository),
+                // Provide the new use case to the BLoC
+                applyEcmpConfig: ApplyEcmpConfig(repository),
               );
             },
           ),

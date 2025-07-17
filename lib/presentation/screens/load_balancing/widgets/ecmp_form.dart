@@ -16,7 +16,6 @@ class _EcmpFormState extends State<EcmpForm> {
   final _formKey = GlobalKey<FormState>();
   final _gateway1Controller = TextEditingController();
   final _gateway2Controller = TextEditingController();
-
   // IP validation regex
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
 
@@ -29,7 +28,7 @@ class _EcmpFormState extends State<EcmpForm> {
 
   bool _isValidIp(String ip) {
     if (!_ipRegex.hasMatch(ip)) return false;
-    
+
     final parts = ip.split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -61,27 +60,27 @@ class _EcmpFormState extends State<EcmpForm> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'تنظیمات ECMP',
+                'ECMP Settings',
                 style: Theme.of(context).textTheme.headlineSmall,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
               Text(
-                'آدرس IP گیت‌وی‌های اینترنت خود را وارد کنید. ترافیک به طور مساوی بین دو گیت‌وی توزیع خواهد شد.',
+                'Enter the IP addresses of your internet gateways. Traffic will be distributed equally between them.',
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
               _GatewayInputField(
                 controller: _gateway1Controller,
-                label: 'گیت‌وی ۱',
-                hint: '192.168.1.1',
+                label: 'Gateway 1',
+                hint: 'e.g., 192.168.1.1',
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
-                    return 'آدرس IP گیت‌وی ۱ الزامی است';
+                    return 'Gateway 1 IP address is required';
                   }
                   if (!_isValidIp(value.trim())) {
-                    return 'فرمت آدرس IP نامعتبر است';
+                    return 'Invalid IP address format';
                   }
                   return null;
                 },
@@ -89,17 +88,17 @@ class _EcmpFormState extends State<EcmpForm> {
               const SizedBox(height: 16),
               _GatewayInputField(
                 controller: _gateway2Controller,
-                label: 'گیت‌وی ۲',
-                hint: '192.168.2.1',
+                label: 'Gateway 2',
+                hint: 'e.g., 192.168.2.1',
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
-                    return 'آدرس IP گیت‌وی ۲ الزامی است';
+                    return 'Gateway 2 IP address is required';
                   }
                   if (!_isValidIp(value.trim())) {
-                    return 'فرمت آدرس IP نامعتبر است';
+                    return 'Invalid IP address format';
                   }
                   if (value.trim() == _gateway1Controller.text.trim()) {
-                    return 'گیت‌وی ۲ نمی‌تواند مشابه گیت‌وی ۱ باشد';
+                    return 'Gateway 2 cannot be the same as Gateway 1';
                   }
                   return null;
                 },
@@ -113,7 +112,7 @@ class _EcmpFormState extends State<EcmpForm> {
                   return ElevatedButton.icon(
                     onPressed: _applyEcmpConfig,
                     icon: const Icon(Icons.settings),
-                    label: const Text('اعمال تنظیمات'),
+                    label: const Text('Apply Settings'),
                   );
                 },
               ),
@@ -125,27 +124,25 @@ class _EcmpFormState extends State<EcmpForm> {
   }
 }
 
-// بهبود _GatewayInputField برای جلوگیری از ping با IP خالی
+// Improved _GatewayInputField to prevent pinging with an empty IP
 class _GatewayInputField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
   final String hint;
   final String? Function(String?)? validator;
-
   const _GatewayInputField({
     required this.controller,
     required this.label,
     required this.hint,
     this.validator,
   });
-
   // IP validation regex
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
 
   bool _isValidIp(String ip) {
     if (ip.trim().isEmpty) return false;
     if (!_ipRegex.hasMatch(ip.trim())) return false;
-    
+
     final parts = ip.trim().split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -184,10 +181,9 @@ class _GatewayInputField extends StatelessWidget {
                       )
                     : IconButton(
                         icon: const Icon(Icons.network_ping),
-                        tooltip: canPing ? 'تست اتصال' : 'IP معتبر وارد کنید',
+                        tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
                         onPressed: canPing
                             ? () {
-                                debugPrint('--- PING BUTTON PRESSED for IP: ${controller.text.trim()} ---');
                                 context
                                     .read<LoadBalancingBloc>()
                                     .add(PingGatewayRequested(controller.text.trim()));
@@ -196,9 +192,8 @@ class _GatewayInputField extends StatelessWidget {
                       ),
               ),
               onChanged: (value) {
-                // برای به‌روزرسانی حالت دکمه ping
+                // Trigger a rebuild to update the ping button's enabled state
                 if (context.mounted) {
-                  // Trigger rebuild without dispatching unnecessary events
                   (context as Element).markNeedsBuild();
                 }
               },
@@ -208,12 +203,12 @@ class _GatewayInputField extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: pingResult.contains('موفق') 
-                      ? Colors.green.withAlpha((.1*255).round())
-                      : Colors.orange.withAlpha((.1*255).round()),
+                  color: pingResult.toLowerCase().contains('success')
+                      ? Colors.green.withAlpha((.1 * 255).round())
+                      : Colors.orange.withAlpha((.1 * 255).round()),
                   border: Border.all(
-                    color: pingResult.contains('موفق') 
-                        ? Colors.green 
+                    color: pingResult.toLowerCase().contains('success')
+                        ? Colors.green
                         : Colors.orange,
                   ),
                   borderRadius: BorderRadius.circular(8),
@@ -221,12 +216,12 @@ class _GatewayInputField extends StatelessWidget {
                 child: Row(
                   children: [
                     Icon(
-                      pingResult.contains('موفق') 
-                          ? Icons.check_circle 
+                      pingResult.toLowerCase().contains('success')
+                          ? Icons.check_circle
                           : Icons.warning,
                       size: 16,
-                      color: pingResult.contains('موفق') 
-                          ? Colors.green 
+                      color: pingResult.toLowerCase().contains('success')
+                          ? Colors.green
                           : Colors.orange,
                     ),
                     const SizedBox(width: 8),
@@ -235,8 +230,8 @@ class _GatewayInputField extends StatelessWidget {
                         pingResult,
                         style: TextStyle(
                           fontSize: 12,
-                          color: pingResult.contains('موفق') 
-                              ? Colors.green.shade700 
+                          color: pingResult.toLowerCase().contains('success')
+                              ? Colors.green.shade700
                               : Colors.orange.shade700,
                         ),
                       ),
@@ -248,7 +243,7 @@ class _GatewayInputField extends StatelessWidget {
                             .read<LoadBalancingBloc>()
                             .add(ClearPingResult(ipAddress));
                       },
-                      tooltip: 'پاک کردن نتیجه',
+                      tooltip: 'Clear Result',
                     ),
                   ],
                 ),

@@ -6,9 +6,14 @@ abstract class DeviceRepository {
   Future<void> checkCredentials(DeviceCredentials credentials);
   Future<List<RouterInterface>> getInterfaces(DeviceCredentials credentials);
   Future<String> getRoutingTable(DeviceCredentials credentials);
-  // Add the pingGateway method back to the repository interface
   Future<String> pingGateway({
     required DeviceCredentials credentials,
     required String ipAddress,
+  });
+  // New method to apply ECMP configuration
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required String gateway1,
+    required String gateway2,
   });
 }

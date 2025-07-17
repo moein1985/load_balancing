@@ -3,37 +3,42 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/get_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
-import 'load_balancing_event.dart';
+// Import the event file with a prefix to resolve the name conflict
+import 'load_balancing_event.dart' as events;
 import 'load_balancing_state.dart';
 
-class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
+class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingState> {
   final GetInterfaces getInterfaces;
   final GetRoutingTable getRoutingTable;
   final PingGateway pingGateway;
+  final ApplyEcmpConfig applyEcmpConfig; // This is the Use Case class
 
-  // مدیریت عملیات‌های همزمان ping
+  // Manage concurrent ping operations
   final Map<String, Timer> _pingTimers = {};
 
   LoadBalancingBloc({
     required this.getInterfaces,
     required this.getRoutingTable,
     required this.pingGateway,
+    required this.applyEcmpConfig, // Injected dependency
   }) : super(const LoadBalancingState()) {
-    on<ScreenStarted>(_onScreenStarted);
-    on<FetchInterfacesRequested>(_onFetchInterfaces);
-    on<FetchRoutingTableRequested>(_onFetchRoutingTable);
-    on<PingGatewayRequested>(_onPingGateway);
-    on<LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
-    on<ApplyEcmpConfig>(_onApplyEcmpConfig);
-    on<ClearPingResult>(_onClearPingResult);
+    on<events.ScreenStarted>(_onScreenStarted);
+    on<events.FetchInterfacesRequested>(_onFetchInterfaces);
+    on<events.FetchRoutingTableRequested>(_onFetchRoutingTable);
+    on<events.PingGatewayRequested>(_onPingGateway);
+    on<events.LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
+    // Use the prefixed event name here
+    on<events.ApplyEcmpConfig>(_onApplyEcmpConfig);
+    on<events.ClearPingResult>(_onClearPingResult);
   }
 
   @override
   Future<void> close() {
-    // پاکسازی تایمرها
+    // Clean up timers
     for (final timer in _pingTimers.values) {
       timer.cancel();
     }
@@ -47,22 +52,22 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     }
   }
 
-  void _onScreenStarted(ScreenStarted event, Emitter<LoadBalancingState> emit) {
-    _logDebug('صفحه شروع شد - IP: ${event.credentials.ip}');
+  void _onScreenStarted(events.ScreenStarted event, Emitter<LoadBalancingState> emit) {
+    _logDebug('Screen started - IP: ${event.credentials.ip}');
     emit(state.copyWith(credentials: event.credentials));
-    add(FetchInterfacesRequested());
+    add(events.FetchInterfacesRequested());
   }
 
   void _onLoadBalancingTypeSelected(
-    LoadBalancingTypeSelected event,
+    events.LoadBalancingTypeSelected event,
     Emitter<LoadBalancingState> emit,
   ) {
-    _logDebug('نوع Load Balancing انتخاب شد: ${event.type}');
+    _logDebug('Load Balancing type selected: ${event.type}');
     emit(state.copyWith(type: event.type));
   }
 
   void _onClearPingResult(
-    ClearPingResult event,
+    events.ClearPingResult event,
     Emitter<LoadBalancingState> emit,
   ) {
     final newPingResults = Map<String, String>.from(state.pingResults);
@@ -71,133 +76,114 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
   }
 
   Future<void> _onFetchInterfaces(
-    FetchInterfacesRequested event,
+    events.FetchInterfacesRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available');
       return;
     }
 
-    _logDebug('شروع دریافت Interface ها');
+    _logDebug('Starting to fetch interfaces');
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
-    
     try {
       final interfaces = await getInterfaces(state.credentials!);
-      _logDebug('${interfaces.length} Interface دریافت شد');
-      
+      _logDebug('${interfaces.length} interfaces received');
       emit(state.copyWith(
         interfaces: interfaces,
         interfacesStatus: DataStatus.success,
-        error: '',
       ));
     } on ServerFailure catch (e) {
-      _logDebug('خطا در دریافت Interface ها: ${e.message}');
+      _logDebug('Error fetching interfaces: ${e.message}');
       emit(state.copyWith(
         interfacesStatus: DataStatus.failure,
         error: e.message,
       ));
     } catch (e) {
-      _logDebug('خطای ناشناخته در دریافت Interface ها: $e');
+      _logDebug('Unknown error fetching interfaces: $e');
       emit(state.copyWith(
         interfacesStatus: DataStatus.failure,
-        error: 'خطای ناشناخته در دریافت Interface ها',
+        error: 'An unknown error occurred while fetching interfaces.',
       ));
     }
   }
 
   Future<void> _onFetchRoutingTable(
-    FetchRoutingTableRequested event,
+    events.FetchRoutingTableRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available');
       return;
     }
 
-    _logDebug('شروع دریافت جدول مسیریابی');
+    _logDebug('Starting to fetch routing table');
     emit(state.copyWith(
       routingTableStatus: DataStatus.loading,
       clearRoutingTable: true,
     ));
-    
     try {
       final table = await getRoutingTable(state.credentials!);
-      _logDebug('جدول مسیریابی دریافت شد');
-      
+      _logDebug('Routing table received');
       emit(state.copyWith(
         routingTable: table,
         routingTableStatus: DataStatus.success,
       ));
     } on ServerFailure catch (e) {
-      _logDebug('خطا در دریافت جدول مسیریابی: ${e.message}');
+      _logDebug('Error fetching routing table: ${e.message}');
       emit(state.copyWith(
-        routingTable: 'خطا: ${e.message}',
+        routingTable: 'Error: ${e.message}',
         routingTableStatus: DataStatus.failure,
       ));
     } catch (e) {
-      _logDebug('خطای ناشناخته در دریافت جدول مسیریابی: $e');
+      _logDebug('Unknown error fetching routing table: $e');
       emit(state.copyWith(
-        routingTable: 'خطای ناشناخته در دریافت جدول مسیریابی',
+        routingTable: 'An unknown error occurred while fetching routing table.',
         routingTableStatus: DataStatus.failure,
       ));
     }
   }
 
   Future<void> _onPingGateway(
-    PingGatewayRequested event,
+    events.PingGatewayRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available');
       return;
     }
 
     final ipAddress = event.ipAddress.trim();
     
-    // اعتبارسنجی IP
+    // IP Validation
     if (ipAddress.isEmpty) {
-      _logDebug('خطا: IP خالی برای ping');
+      _logDebug('Error: Empty IP for ping');
       final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[''] = 'خطا: آدرس IP نمی‌تواند خالی باشد';
+      newPingResults[''] = 'Error: IP address cannot be empty.';
       emit(state.copyWith(pingResults: newPingResults));
       return;
     }
 
-    // بررسی اگر ping در حال انجام است
+    // Check if ping is already in progress
     if (state.pingingIp == ipAddress) {
-      _logDebug('ping برای IP $ipAddress در حال انجام است');
+      _logDebug('Ping for IP $ipAddress is already in progress');
       return;
     }
 
-    // لغو ping قبلی اگر وجود دارد
+    // Cancel previous timer if it exists
     _pingTimers[ipAddress]?.cancel();
-    
-    _logDebug('شروع ping برای IP: $ipAddress');
+    _logDebug('Starting ping for IP: $ipAddress');
     emit(state.copyWith(
       pingStatus: DataStatus.loading,
       pingingIp: ipAddress,
     ));
-
     try {
-      // تنظیم تایمر برای نمایش پیشرفت
-      _pingTimers[ipAddress] = Timer.periodic(
-        Duration(seconds: 1),
-        (timer) {
-          if (!emit.isDone && state.pingingIp == ipAddress) {
-            // می‌توان پیشرفت ping را نمایش داد
-          }
-        },
-      );
-
       final result = await pingGateway(
         credentials: state.credentials!,
         ipAddress: ipAddress,
       );
+      _logDebug('Ping result for $ipAddress: $result');
       
-      _logDebug('نتیجه ping برای $ipAddress: $result');
-      
-      // لغو تایمر
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
       
@@ -210,14 +196,12 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
         pingingIp: '',
       ));
     } catch (e) {
-      _logDebug('خطا در ping برای $ipAddress: $e');
-      
-      // لغو تایمر
+      _logDebug('Error during ping for $ipAddress: $e');
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
       
       final newPingResults = Map<String, String>.from(state.pingResults);
-      newPingResults[ipAddress] = 'خطا در ping: ${e.toString()}';
+      newPingResults[ipAddress] = 'Ping Error: ${e.toString()}';
       
       emit(state.copyWith(
         pingResults: newPingResults,
@@ -227,37 +211,51 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     }
   }
 
+  // Updated handler for applying ECMP configuration
   Future<void> _onApplyEcmpConfig(
-    ApplyEcmpConfig event,
+    // Use the prefixed event name here
+    events.ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
-      _logDebug('خطا: اعتبارنامه موجود نیست');
+      _logDebug('Error: Credentials not available for applying config');
       return;
     }
 
-    _logDebug('شروع اعمال تنظیمات ECMP');
+    _logDebug('Starting to apply ECMP config');
     _logDebug('Gateway 1: ${event.gateway1}');
     _logDebug('Gateway 2: ${event.gateway2}');
     
-    emit(state.copyWith(status: DataStatus.loading));
+    // Set loading state and clear any previous success/error messages
+    emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
     
     try {
-      // پیاده‌سازی اعمال تنظیمات ECMP
-      // این بخش بر اساس نیازهای خاص شما پیاده‌سازی خواهد شد
+      // This is the Use Case class, no prefix needed
+      final result = await applyEcmpConfig(
+        credentials: state.credentials!,
+        gateway1: event.gateway1,
+        gateway2: event.gateway2,
+      );
+
+      _logDebug('ECMP config apply result: $result');
       
-      await Future.delayed(Duration(seconds: 2)); // شبیه‌سازی عملیات
-      
-      _logDebug('تنظیمات ECMP با موفقیت اعمال شد');
-      emit(state.copyWith(
-        status: DataStatus.success,
-        error: '',
-      ));
+      // Check result message for success or failure keywords
+      if (result.toLowerCase().contains('fail') || result.toLowerCase().contains('error')) {
+         emit(state.copyWith(
+            status: DataStatus.failure,
+            error: result,
+          ));
+      } else {
+         emit(state.copyWith(
+            status: DataStatus.success,
+            successMessage: result,
+          ));
+      }
     } catch (e) {
-      _logDebug('خطا در اعمال تنظیمات ECMP: $e');
+      _logDebug('Error applying ECMP config: $e');
       emit(state.copyWith(
         status: DataStatus.failure,
-        error: 'خطا در اعمال تنظیمات: ${e.toString()}',
+        error: 'Failed to apply config: ${e.toString()}',
       ));
     }
   }

@@ -15,16 +15,17 @@ class RestApiClientHandler {
   }
 
   Future<void> checkCredentials(DeviceCredentials credentials) async {
-    _logDebug('بررسی اعتبار REST API');
+    _logDebug('Checking REST API credentials');
     
     final dio = Dio();
     final String basicAuth = 'Basic ${base64Encode(
         utf8.encode('${credentials.username}:${credentials.password}'))}';
     
+    // Allow self-signed certificates for lab environments
     (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
       client.badCertificateCallback = (cert, host, port) {
-        _logDebug('هشدار: گواهی SSL تایید نشده برای $host:$port');
+        _logDebug('Warning: Untrusted SSL certificate for $host:$port');
         return true;
       };
       return client;
@@ -38,32 +39,30 @@ class RestApiClientHandler {
             'Authorization': basicAuth,
             'Accept': 'application/yang-data+json'
           },
-          receiveTimeout: Duration(seconds: 10),
-          sendTimeout: Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
+          sendTimeout: const Duration(seconds: 10),
         ),
       );
-      
-      _logDebug('REST API اتصال موفق - کد پاسخ: ${response.statusCode}');
+      _logDebug('REST API connection successful - Response code: ${response.statusCode}');
     } on DioException catch (e) {
-      _logDebug('خطا در REST API: ${e.type} - ${e.message}');
-      
+      _logDebug('REST API Error: ${e.type} - ${e.message}');
       if (e.response?.statusCode == 401) {
         throw const ServerFailure(
-            'احراز هویت ناموفق. نام کاربری و رمز عبور را بررسی کنید.');
+            'Authentication failed. Check your username and password.');
       } else if (e.type == DioExceptionType.connectionTimeout ||
           e.type == DioExceptionType.receiveTimeout) {
         throw const ServerFailure(
-            'زمان اتصال به پایان رسید. IP را بررسی کنید و مطمئن شوید RESTCONF فعال است.');
+            'Connection timed out. Check the IP and ensure RESTCONF is enabled.');
       } else if (e.type == DioExceptionType.connectionError) {
         throw const ServerFailure(
-            'خطا در اتصال. IP و دسترسی شبکه را بررسی کنید.');
+            'Connection error. Check the IP and network accessibility.');
       } else {
         throw ServerFailure(
-            'خطای RESTCONF: ${e.message ?? 'خطای ناشناخته Dio'}');
+            'RESTCONF Error: ${e.message ?? 'Unknown Dio error'}');
       }
     } catch (e) {
-      _logDebug('خطای ناشناخته REST API: $e');
-      throw ServerFailure('خطای ناشناخته: ${e.toString()}');
+      _logDebug('Unknown REST API error: $e');
+      throw ServerFailure('An unknown error occurred: ${e.toString()}');
     }
   }
 }

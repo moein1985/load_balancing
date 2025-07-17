@@ -7,10 +7,14 @@ enum LoadBalancingType { ecmp, pbr }
 enum DataStatus { initial, loading, success, failure }
 
 class LoadBalancingState extends Equatable {
-  final DeviceCredentials? credentials; // Holds the credentials to be used for each request
+  // Holds the credentials to be used for each request
+  final DeviceCredentials? credentials; 
   final LoadBalancingType type;
-  final DataStatus status;
+  // General status for operations like applying configs
+  final DataStatus status; 
   final String error;
+  // Specific message for successful operations
+  final String? successMessage; 
 
   final List<RouterInterface> interfaces;
   final DataStatus interfacesStatus;
@@ -27,6 +31,7 @@ class LoadBalancingState extends Equatable {
     this.type = LoadBalancingType.ecmp,
     this.status = DataStatus.initial,
     this.error = '',
+    this.successMessage,
     this.interfaces = const [],
     this.interfacesStatus = DataStatus.initial,
     this.routingTable,
@@ -41,6 +46,8 @@ class LoadBalancingState extends Equatable {
     LoadBalancingType? type,
     DataStatus? status,
     String? error,
+    String? successMessage,
+    bool clearSuccessMessage = false,
     List<RouterInterface>? interfaces,
     DataStatus? interfacesStatus,
     String? routingTable,
@@ -54,7 +61,10 @@ class LoadBalancingState extends Equatable {
       credentials: credentials ?? this.credentials,
       type: type ?? this.type,
       status: status ?? this.status,
-      error: error ?? this.error,
+      // Clear error on new status, unless it's a failure status
+      error: (status != null && status != DataStatus.failure) ? '' : error ?? this.error,
+      // Handle clearing or setting the success message
+      successMessage: clearSuccessMessage ? null : successMessage ?? this.successMessage,
       interfaces: interfaces ?? this.interfaces,
       interfacesStatus: interfacesStatus ?? this.interfacesStatus,
       routingTable: clearRoutingTable ? null : routingTable ?? this.routingTable,
@@ -67,7 +77,7 @@ class LoadBalancingState extends Equatable {
 
   @override
   List<Object?> get props => [
-        credentials, type, status, error, interfaces, interfacesStatus,
+        credentials, type, status, error, successMessage, interfaces, interfacesStatus,
         routingTable, routingTableStatus, pingResults, pingStatus, pingingIp
       ];
 }
