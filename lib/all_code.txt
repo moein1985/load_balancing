@@ -1497,14 +1497,15 @@ import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/get_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
-import 'load_balancing_event.dart';
+// Import the event file with a prefix to resolve the name conflict
+import 'load_balancing_event.dart' as events;
 import 'load_balancing_state.dart';
 
-class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
+class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingState> {
   final GetInterfaces getInterfaces;
   final GetRoutingTable getRoutingTable;
   final PingGateway pingGateway;
-  final ApplyEcmpConfig applyEcmpConfig; // New use case
+  final ApplyEcmpConfig applyEcmpConfig; // This is the Use Case class
 
   // Manage concurrent ping operations
   final Map<String, Timer> _pingTimers = {};
@@ -1515,13 +1516,14 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     required this.pingGateway,
     required this.applyEcmpConfig, // Injected dependency
   }) : super(const LoadBalancingState()) {
-    on<ScreenStarted>(_onScreenStarted);
-    on<FetchInterfacesRequested>(_onFetchInterfaces);
-    on<FetchRoutingTableRequested>(_onFetchRoutingTable);
-    on<PingGatewayRequested>(_onPingGateway);
-    on<LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
-    on<ApplyEcmpConfig>(_onApplyEcmpConfig);
-    on<ClearPingResult>(_onClearPingResult);
+    on<events.ScreenStarted>(_onScreenStarted);
+    on<events.FetchInterfacesRequested>(_onFetchInterfaces);
+    on<events.FetchRoutingTableRequested>(_onFetchRoutingTable);
+    on<events.PingGatewayRequested>(_onPingGateway);
+    on<events.LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
+    // Use the prefixed event name here
+    on<events.ApplyEcmpConfig>(_onApplyEcmpConfig);
+    on<events.ClearPingResult>(_onClearPingResult);
   }
 
   @override
@@ -1540,14 +1542,14 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     }
   }
 
-  void _onScreenStarted(ScreenStarted event, Emitter<LoadBalancingState> emit) {
+  void _onScreenStarted(events.ScreenStarted event, Emitter<LoadBalancingState> emit) {
     _logDebug('Screen started - IP: ${event.credentials.ip}');
     emit(state.copyWith(credentials: event.credentials));
-    add(FetchInterfacesRequested());
+    add(events.FetchInterfacesRequested());
   }
 
   void _onLoadBalancingTypeSelected(
-    LoadBalancingTypeSelected event,
+    events.LoadBalancingTypeSelected event,
     Emitter<LoadBalancingState> emit,
   ) {
     _logDebug('Load Balancing type selected: ${event.type}');
@@ -1555,7 +1557,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
   }
 
   void _onClearPingResult(
-    ClearPingResult event,
+    events.ClearPingResult event,
     Emitter<LoadBalancingState> emit,
   ) {
     final newPingResults = Map<String, String>.from(state.pingResults);
@@ -1564,7 +1566,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
   }
 
   Future<void> _onFetchInterfaces(
-    FetchInterfacesRequested event,
+    events.FetchInterfacesRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
@@ -1597,7 +1599,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
   }
 
   Future<void> _onFetchRoutingTable(
-    FetchRoutingTableRequested event,
+    events.FetchRoutingTableRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
@@ -1633,7 +1635,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
   }
 
   Future<void> _onPingGateway(
-    PingGatewayRequested event,
+    events.PingGatewayRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
@@ -1701,7 +1703,8 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
 
   // Updated handler for applying ECMP configuration
   Future<void> _onApplyEcmpConfig(
-    ApplyEcmpConfig event,
+    // Use the prefixed event name here
+    events.ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
     if (state.credentials == null) {
@@ -1717,6 +1720,7 @@ class LoadBalancingBloc extends Bloc<LoadBalancingEvent, LoadBalancingState> {
     emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
     
     try {
+      // This is the Use Case class, no prefix needed
       final result = await applyEcmpConfig(
         credentials: state.credentials!,
         gateway1: event.gateway1,

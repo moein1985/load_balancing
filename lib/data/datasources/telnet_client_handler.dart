@@ -304,30 +304,32 @@ class TelnetClientHandler {
     return await _executeTelnetPing(credentials, ipAddress);
   }
   
-  // New method to apply ECMP configuration via Telnet
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
-    _logDebug('Applying ECMP config via Telnet for gateways: $gateway1, $gateway2');
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, List<String> gateways) async {
+    _logDebug('Applying ECMP config via Telnet for gateways: ${gateways.join(", ")}');
     try {
-       final commands = [
-        'configure terminal',
-        'ip route 0.0.0.0 0.0.0.0 $gateway1',
-        'ip route 0.0.0.0 0.0.0.0 $gateway2',
-        'end'
-      ];
-      // We don't need 'terminal length 0' here, as _executeTelnetCommands adds it.
-      // We pass the commands directly.
+      // Dynamically build the list of commands
+      final List<String> commands = ['configure terminal'];
+      for (final gateway in gateways) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+      commands.add('end');
+
+      // _executeTelnetCommands already adds 'terminal length 0'
+      // so we pass the commands starting from the second element
       final result = await _executeTelnetCommands(credentials, commands.sublist(1));
-       _logDebug('ECMP config commands sent via Telnet');
+      _logDebug('ECMP config commands sent via Telnet');
 
       if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
-          _logDebug('Error applying ECMP config via Telnet: $result');
-          return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+        _logDebug('Error applying ECMP config via Telnet: $result');
+        return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
       }
 
       return 'ECMP configuration applied successfully.';
     } catch (e) {
-       _logDebug('Error applying ECMP config via Telnet: $e');
-       return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+      _logDebug('Error applying ECMP config via Telnet: $e');
+      return 'An error occurred while applying ECMP configuration: ${e.toString()}';
     }
   }
 }

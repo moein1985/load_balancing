@@ -30,7 +30,8 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<List<RouterInterface>> getInterfaces(
-      DeviceCredentials credentials) async {
+    DeviceCredentials credentials,
+  ) async {
     try {
       return await remoteDataSource.fetchInterfaces(credentials);
     } on ServerFailure catch (e) {
@@ -52,9 +53,10 @@ class DeviceRepositoryImpl implements DeviceRepository {
   }
 
   @override
-  Future<String> pingGateway(
-      {required DeviceCredentials credentials,
-      required String ipAddress}) async {
+  Future<String> pingGateway({
+    required DeviceCredentials credentials,
+    required String ipAddress,
+  }) async {
     try {
       return await remoteDataSource.pingGateway(credentials, ipAddress);
     } on ServerFailure catch (e) {
@@ -64,14 +66,13 @@ class DeviceRepositoryImpl implements DeviceRepository {
     }
   }
 
-  // Implementation for the new ECMP method
   @override
-  Future<String> applyEcmpConfig(
-      {required DeviceCredentials credentials,
-      required String gateway1,
-      required String gateway2}) async {
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gateways,
+  }) async {
     try {
-      return await remoteDataSource.applyEcmpConfig(credentials, gateway1, gateway2);
+      return await remoteDataSource.applyEcmpConfig(credentials, gateways);
     } on ServerFailure catch (e) {
       return e.message;
     } catch (e) {

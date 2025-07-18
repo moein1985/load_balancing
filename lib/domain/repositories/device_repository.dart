@@ -10,10 +10,8 @@ abstract class DeviceRepository {
     required DeviceCredentials credentials,
     required String ipAddress,
   });
-  // New method to apply ECMP configuration
   Future<String> applyEcmpConfig({
     required DeviceCredentials credentials,
-    required String gateway1,
-    required String gateway2,
+    required List<String> gateways,
   });
 }

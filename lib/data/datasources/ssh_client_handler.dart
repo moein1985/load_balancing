@@ -35,15 +35,21 @@ class SshClientHandler {
       return client;
     } on TimeoutException {
       _logDebug('Error: SSH connection timed out');
-      throw const ServerFailure('Connection timed out. Please check the IP address and port.');
+      throw const ServerFailure(
+        'Connection timed out. Please check the IP address and port.',
+      );
     } on SocketException catch (e) {
       _logDebug('Error: SSH connection failed - ${e.message}');
-      throw const ServerFailure('Unable to connect to the device. Check the IP address and port.');
+      throw const ServerFailure(
+        'Unable to connect to the device. Check the IP address and port.',
+      );
     } catch (e) {
       final errorMsg = e.toString().toLowerCase();
       if (errorMsg.contains('auth')) {
         _logDebug('Error: SSH authentication failed');
-        throw const ServerFailure('Authentication failed. Check your username and password.');
+        throw const ServerFailure(
+          'Authentication failed. Check your username and password.',
+        );
       }
       _logDebug('Error: SSH - $e');
       throw ServerFailure('SSH Error: ${e.toString()}');
@@ -63,14 +69,14 @@ class SshClientHandler {
     }
   }
 
-  Future<String> _executeSshCommandsWithShell(SSHClient client, List<String> commands) async {
+  Future<String> _executeSshCommandsWithShell(
+    SSHClient client,
+    List<String> commands,
+  ) async {
     _logDebug('Starting execution of SSH commands with Shell');
     try {
       final shell = await client.shell(
-        pty: SSHPtyConfig(
-          width: 80,
-          height: 24,
-        ),
+        pty: SSHPtyConfig(width: 80, height: 24),
       );
       final completer = Completer<String>();
       final output = StringBuffer();
@@ -88,7 +94,9 @@ class SshClientHandler {
 
       shell.stdout.cast<List<int>>().transform(utf8.decoder).listen((data) {
         output.write(data);
-        _logDebug('SSH Shell Output: ${data.replaceAll('\r\n', '\\n').replaceAll('\n', '\\n')}');
+        _logDebug(
+          'SSH Shell Output: ${data.replaceAll('\r\n', '\\n').replaceAll('\n', '\\n')}',
+        );
 
         // Wait for the prompt before sending the first command
         if (!isReady && (data.contains('#') || data.contains('>'))) {
@@ -118,7 +126,9 @@ class SshClientHandler {
       Timer(_commandTimeout, () {
         if (!completer.isCompleted) {
           shell.close();
-          completer.completeError(TimeoutException('SSH Shell operation timed out', _commandTimeout));
+          completer.completeError(
+            TimeoutException('SSH Shell operation timed out', _commandTimeout),
+          );
         }
       });
 
@@ -133,7 +143,10 @@ class SshClientHandler {
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final result = await _executeSshCommand(client, 'show ip interface brief');
+      final result = await _executeSshCommand(
+        client,
+        'show ip interface brief',
+      );
       _logDebug('SSH interfaces fetched');
       return result;
     } catch (e) {
@@ -164,8 +177,10 @@ class SshClientHandler {
     try {
       client = await _createSshClient(credentials);
       try {
-        final result = await _executeSshCommandsWithShell(
-            client, ['terminal length 0', 'show ip route']);
+        final result = await _executeSshCommandsWithShell(client, [
+          'terminal length 0',
+          'show ip route',
+        ]);
         _logDebug('SSH routing table fetched with Shell');
         return result;
       } catch (e) {
@@ -184,12 +199,18 @@ class SshClientHandler {
     }
   }
 
-  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress) async {
+  Future<String> pingGateway(
+    DeviceCredentials credentials,
+    String ipAddress,
+  ) async {
     _logDebug('Starting SSH ping for IP: $ipAddress');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final result = await _executeSshCommand(client, 'ping $ipAddress repeat 5');
+      final result = await _executeSshCommand(
+        client,
+        'ping $ipAddress repeat 5',
+      );
 
       _logDebug('SSH ping result received');
       return _analyzePingResult(result);
@@ -216,26 +237,34 @@ class SshClientHandler {
     return 'Ping failed. Check the IP or connection.';
   }
 
-  // New method to apply ECMP configuration
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
-    _logDebug('Applying ECMP config for gateways: $gateway1, $gateway2');
+  Future<String> applyEcmpConfig(
+    DeviceCredentials credentials,
+    List<String> gateways,
+  ) async {
+    _logDebug('Applying ECMP config for gateways: ${gateways.join(", ")}');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final commands = [
-        'configure terminal',
-        'ip route 0.0.0.0 0.0.0.0 $gateway1',
-        'ip route 0.0.0.0 0.0.0.0 $gateway2',
-        'end'
-      ];
+
+      // Dynamically build the list of commands from the gateways list
+      final List<String> commands = ['configure terminal'];
+      for (final gateway in gateways) {
+        // Ensure not to add commands for empty gateway strings
+        if (gateway.trim().isNotEmpty) {
+          commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+      commands.add('end');
+
       final result = await _executeSshCommandsWithShell(client, commands);
       _logDebug('ECMP config commands executed');
 
-      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
-          _logDebug('Error applying ECMP config: $result');
-          return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      if (result.toLowerCase().contains('invalid input') ||
+          result.toLowerCase().contains('error')) {
+        _logDebug('Error applying ECMP config: $result');
+        return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
       }
-      
+
       return 'ECMP configuration applied successfully.';
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');

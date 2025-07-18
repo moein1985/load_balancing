@@ -211,9 +211,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
 
-  // Updated handler for applying ECMP configuration
   Future<void> _onApplyEcmpConfig(
-    // Use the prefixed event name here
     events.ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
@@ -223,23 +221,20 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
 
     _logDebug('Starting to apply ECMP config');
-    _logDebug('Gateway 1: ${event.gateway1}');
-    _logDebug('Gateway 2: ${event.gateway2}');
+    // Log the list of gateways
+    _logDebug('Gateways: ${event.gateways.join(", ")}');
     
-    // Set loading state and clear any previous success/error messages
     emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
     
     try {
-      // This is the Use Case class, no prefix needed
+      // Pass the list of gateways to the use case
       final result = await applyEcmpConfig(
         credentials: state.credentials!,
-        gateway1: event.gateway1,
-        gateway2: event.gateway2,
+        gateways: event.gateways,
       );
 
       _logDebug('ECMP config apply result: $result');
       
-      // Check result message for success or failure keywords
       if (result.toLowerCase().contains('fail') || result.toLowerCase().contains('error')) {
          emit(state.copyWith(
             status: DataStatus.failure,

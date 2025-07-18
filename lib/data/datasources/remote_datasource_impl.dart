@@ -209,15 +209,14 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     return await _restApiHandler.checkCredentials(credentials);
   }
 
-  // Implementation for the new ECMP method
   @override
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
+  Future<String> applyEcmpConfig(DeviceCredentials credentials, List<String> gateways) async {
     _logDebug('Applying ECMP config - ${credentials.type}');
     try {
-       if (credentials.type == ConnectionType.ssh) {
-        return await _sshHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+      if (credentials.type == ConnectionType.ssh) {
+        return await _sshHandler.applyEcmpConfig(credentials, gateways);
       } else if (credentials.type == ConnectionType.telnet) {
-        return await _telnetHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+        return await _telnetHandler.applyEcmpConfig(credentials, gateways);
       } else {
         return 'Configuration via REST API is not yet supported.';
       }

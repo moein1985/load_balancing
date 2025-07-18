@@ -7,6 +7,8 @@ abstract class RemoteDataSource {
   Future<List<RouterInterface>> fetchInterfaces(DeviceCredentials credentials);
   Future<String> getRoutingTable(DeviceCredentials credentials);
   Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
-  // New method to apply ECMP configuration
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2);
+  Future<String> applyEcmpConfig(
+    DeviceCredentials credentials,
+    List<String> gateways,
+  );
 }
