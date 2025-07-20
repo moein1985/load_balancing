@@ -116,12 +116,10 @@ class SshClientHandler {
           }
         }
       });
-
       shell.stderr.cast<List<int>>().transform(utf8.decoder).listen((data) {
         _logDebug('SSH Shell Error: $data');
         output.write(data);
       });
-
       // General timeout for the whole operation
       Timer(_commandTimeout, () {
         if (!completer.isCompleted) {
@@ -131,7 +129,6 @@ class SshClientHandler {
           );
         }
       });
-
       return await completer.future;
     } catch (e) {
       _logDebug('Error in SSH Shell: $e');
@@ -158,7 +155,8 @@ class SshClientHandler {
   }
 
   Future<String> fetchDetailedInterfaces(DeviceCredentials credentials) async {
-    SSHClient? client;
+    SSHClient?
+    client;
     try {
       client = await _createSshClient(credentials);
       final result = await _executeSshCommand(client, 'show running-config');
@@ -211,7 +209,6 @@ class SshClientHandler {
         client,
         'ping $ipAddress repeat 5',
       );
-
       _logDebug('SSH ping result received');
       return _analyzePingResult(result);
     } finally {
@@ -237,24 +234,37 @@ class SshClientHandler {
     return 'Ping failed. Check the IP or connection.';
   }
 
-  Future<String> applyEcmpConfig(
-    DeviceCredentials credentials,
-    List<String> gateways,
-  ) async {
-    _logDebug('Applying ECMP config for gateways: ${gateways.join(", ")}');
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
+    _logDebug('Applying ECMP config. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-
-      // Dynamically build the list of commands from the gateways list
       final List<String> commands = ['configure terminal'];
-      for (final gateway in gateways) {
-        // Ensure not to add commands for empty gateway strings
+
+      // Generate commands to remove old gateways
+      for (final gateway in gatewaysToRemove) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+
+      // Generate commands to add new gateways
+      for (final gateway in gatewaysToAdd) {
         if (gateway.trim().isNotEmpty) {
           commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
         }
       }
       commands.add('end');
+
+      // Do nothing if there are no gateways to add or remove
+      if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
+        _logDebug('No changes to apply for ECMP config.');
+        return 'No ECMP configuration changes were needed.';
+      }
 
       final result = await _executeSshCommandsWithShell(client, commands);
       _logDebug('ECMP config commands executed');

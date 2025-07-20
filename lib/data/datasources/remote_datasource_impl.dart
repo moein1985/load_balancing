@@ -15,6 +15,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   final TelnetClientHandler _telnetHandler = TelnetClientHandler();
   final RestApiClientHandler _restApiHandler = RestApiClientHandler();
 
+  // A short delay to prevent overwhelming the router with rapid connections.
+  static const Duration _networkDelay = Duration(seconds: 2);
+
   void _logDebug(String message) {
     if (kDebugMode) {
       debugPrint('[REMOTE_DS] $message');
@@ -32,7 +35,11 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       briefResult = await _sshHandler.fetchInterfaces(credentials);
       detailedResult = await _sshHandler.fetchDetailedInterfaces(credentials);
     } else {
+      // ADDED: Delay before Telnet operations
+      await Future.delayed(_networkDelay);
       briefResult = await _telnetHandler.fetchInterfaces(credentials);
+      
+      await Future.delayed(_networkDelay);
       detailedResult = await _telnetHandler.fetchDetailedInterfaces(credentials);
     }
 
@@ -44,7 +51,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final briefLines = briefResult.split('\n');
     final briefRegex = RegExp(
         r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)');
-    
     // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
@@ -64,7 +70,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
     // Then, find secondary addresses from the detailed config
     final secondaryIps = _extractSecondaryIps(detailedResult);
-    
     // Build the final interface list
     for (final interface in mainInterfaces) {
       final interfaceName = interface['name']!;
@@ -77,7 +82,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         ipAddress: primaryIp,
         status: status,
       ));
-      
       // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
@@ -96,7 +100,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   Map<String, List<String>> _extractSecondaryIps(String configOutput) {
     final secondaryIps = <String, List<String>>{};
     final lines = configOutput.split('\n');
-    String? currentInterface;
+    String?
+    currentInterface;
 
     for (final line in lines) {
       final trimmedLine = line.trim();
@@ -129,6 +134,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     if (credentials.type == ConnectionType.ssh) {
       rawResult = await _sshHandler.getRoutingTable(credentials);
     } else {
+      // ADDED: Delay before Telnet operations
+      await Future.delayed(_networkDelay);
       rawResult = await _telnetHandler.getRoutingTable(credentials);
     }
 
@@ -181,6 +188,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       if (credentials.type == ConnectionType.ssh) {
         return await _sshHandler.pingGateway(credentials, cleanIp);
       } else {
+        // ADDED: Delay before Telnet operations
+        await Future.delayed(_networkDelay);
         return await _telnetHandler.pingGateway(credentials, cleanIp);
       }
     } catch (e) {
@@ -210,13 +219,27 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   @override
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, List<String> gateways) async {
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
     _logDebug('Applying ECMP config - ${credentials.type}');
     try {
       if (credentials.type == ConnectionType.ssh) {
-        return await _sshHandler.applyEcmpConfig(credentials, gateways);
+        return await _sshHandler.applyEcmpConfig(
+          credentials: credentials,
+          gatewaysToAdd: gatewaysToAdd,
+          gatewaysToRemove: gatewaysToRemove,
+        );
       } else if (credentials.type == ConnectionType.telnet) {
-        return await _telnetHandler.applyEcmpConfig(credentials, gateways);
+        // ADDED: Delay before Telnet operations
+        await Future.delayed(_networkDelay);
+        return await _telnetHandler.applyEcmpConfig(
+          credentials: credentials,
+          gatewaysToAdd: gatewaysToAdd,
+          gatewaysToRemove: gatewaysToRemove,
+        );
       } else {
         return 'Configuration via REST API is not yet supported.';
       }

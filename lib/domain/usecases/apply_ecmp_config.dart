@@ -7,15 +7,17 @@ class ApplyEcmpConfig {
 
   ApplyEcmpConfig(this.repository);
 
-  // **MODIFIED USE CASE**
+  /// Executes the use case to apply ECMP configuration.
   Future<String> call({
     required DeviceCredentials credentials,
-    required List<String> gateways,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
   }) async {
-    // Now passes a list of gateways to the repository
+    // Pass both lists to the repository's method
     return await repository.applyEcmpConfig(
       credentials: credentials,
-      gateways: gateways,
+      gatewaysToAdd: gatewaysToAdd,
+      gatewaysToRemove: gatewaysToRemove,
     );
   }
 }

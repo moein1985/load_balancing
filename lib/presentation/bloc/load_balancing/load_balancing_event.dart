@@ -42,10 +42,11 @@ class ClearPingResult extends LoadBalancingEvent {
 }
 
 class ApplyEcmpConfig extends LoadBalancingEvent {
-  final List<String> gateways;
-  const ApplyEcmpConfig({required this.gateways});
+  // Renamed for clarity: this is the final list of gateways from the UI.
+  final List<String> finalGateways; 
+  const ApplyEcmpConfig({required this.finalGateways});
   @override
-  List<Object> get props => [gateways];
+  List<Object> get props => [finalGateways];
 }
 
 class ApplyPbrConfig extends LoadBalancingEvent {

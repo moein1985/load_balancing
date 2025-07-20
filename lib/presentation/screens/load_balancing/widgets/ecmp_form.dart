@@ -17,14 +17,8 @@ class _EcmpFormState extends State<EcmpForm> {
   final List<TextEditingController> _gatewayControllers = [];
 
   @override
-  void initState() {
-    super.initState();
-    _addGatewayField();
-    _addGatewayField();
-  }
-
-  @override
   void dispose() {
+    // Ensure all dynamically created controllers are disposed
     for (final controller in _gatewayControllers) {
       controller.dispose();
     }
@@ -38,40 +32,24 @@ class _EcmpFormState extends State<EcmpForm> {
   }
 
   void _removeGatewayField(int index) {
+    // Dispose the controller before removing it from the list
+    _gatewayControllers[index].dispose();
     setState(() {
-      _gatewayControllers[index].dispose();
       _gatewayControllers.removeAt(index);
     });
   }
 
-  bool _isValidIp(String ip) {
-    final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
-    if (!ipRegex.hasMatch(ip)) return false;
-    final parts = ip.split('.');
-    for (final part in parts) {
-      final num = int.tryParse(part);
-      if (num == null || num < 0 || num > 255) return false;
-    }
-    return true;
-  }
-
   void _applyEcmpConfig() {
     if (_formKey.currentState!.validate()) {
+      // Collect the final list of gateways from the UI controllers.
+      // The BLoC will handle the comparison.
       final gateways = _gatewayControllers
           .map((controller) => controller.text.trim())
-          .where((ip) => ip.isNotEmpty)
+          .where((ip) => ip.isNotEmpty) // Filter out empty fields
           .toList();
-
-      if (gateways.length < 2) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('At least two gateways are required for ECMP.'),
-          backgroundColor: Colors.orange,
-        ));
-        return;
-      }
-
+      
       context.read<LoadBalancingBloc>().add(
-            events.ApplyEcmpConfig(gateways: gateways),
+            events.ApplyEcmpConfig(finalGateways: gateways),
           );
     }
   }
@@ -94,50 +72,64 @@ class _EcmpFormState extends State<EcmpForm> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Enter the IP addresses of your internet gateways. Traffic will be distributed equally between them.',
+                'The app automatically detects existing gateways. Edit, add, or clear fields to update the configuration.',
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-              ListView.separated(
-                physics: const NeverScrollableScrollPhysics(),
-                shrinkWrap: true,
-                itemCount: _gatewayControllers.length,
-                itemBuilder: (context, index) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: _GatewayInputField(
-                          key: ValueKey(_gatewayControllers[index]), // Unique key for each field
-                          controller: _gatewayControllers[index],
-                          label: 'Gateway ${index + 1}',
-                          hint: 'e.g., 192.168.${index + 1}.1',
-                          validator: (value) {
-                            if (value == null || value.trim().isEmpty) {
-                              if (index < 2) return 'Gateway ${index + 1} is required';
-                              return null;
-                            }
-                            if (!_isValidIp(value.trim())) {
-                              return 'Invalid IP address format';
-                            }
-                            return null;
-                          },
-                        ),
-                      ),
-                      if (_gatewayControllers.length > 2)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 8.0, top: 8.0),
-                          child: IconButton(
-                            icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent),
-                            onPressed: () => _removeGatewayField(index),
-                            tooltip: 'Remove Gateway',
+
+              // BlocConsumer handles both listening to state changes and building the UI
+              BlocConsumer<LoadBalancingBloc, LoadBalancingState>(
+                // Listen only when the list of initial gateways changes
+                listenWhen: (prev, curr) => prev.initialEcmpGateways != curr.initialEcmpGateways,
+                listener: (context, state) {
+                  _updateControllersFromState(state.initialEcmpGateways);
+                },
+                // Build the UI based on the current state
+                buildWhen: (prev, curr) => 
+                    prev.initialEcmpGateways != curr.initialEcmpGateways || 
+                    prev.routingTableStatus != curr.routingTableStatus,
+                builder: (context, state) {
+                  // Show a loading indicator while the config is being read for the first time
+                  if (state.routingTableStatus == DataStatus.loading && _gatewayControllers.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 20.0),
+                      child: Center(child: Text("Reading router configuration...")),
+                    );
+                  }
+                  
+                  // Once loaded, build the dynamic list of fields
+                  return ListView.separated(
+                    physics: const NeverScrollableScrollPhysics(),
+                    shrinkWrap: true,
+                    itemCount: _gatewayControllers.length,
+                    itemBuilder: (context, index) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: _GatewayInputField(
+                              key: ValueKey('gateway_field_$index'),
+                              controller: _gatewayControllers[index],
+                              label: 'Gateway ${index + 1}',
+                            ),
                           ),
-                        ),
-                    ],
+                          // Allow removing fields if there is more than one
+                          if (_gatewayControllers.length > 1)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8.0, top: 8.0),
+                              child: IconButton(
+                                icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent),
+                                onPressed: () => _removeGatewayField(index),
+                                tooltip: 'Remove Gateway',
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                    separatorBuilder: (context, index) => const SizedBox(height: 16),
                   );
                 },
-                separatorBuilder: (context, index) => const SizedBox(height: 16),
               ),
               const SizedBox(height: 16),
               OutlinedButton.icon(
@@ -150,14 +142,20 @@ class _EcmpFormState extends State<EcmpForm> {
               ),
               const SizedBox(height: 24),
               BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+                // Rebuild the button only when the overall status changes
+                buildWhen: (prev, curr) => prev.status != curr.status,
                 builder: (context, state) {
                   if (state.status == DataStatus.loading) {
                     return const Center(child: CircularProgressIndicator());
                   }
                   return ElevatedButton.icon(
                     onPressed: _applyEcmpConfig,
-                    icon: const Icon(Icons.settings),
-                    label: const Text('Apply Settings'),
+                    icon: const Icon(Icons.settings_applications),
+                    label: const Text('Apply Changes'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      textStyle: const TextStyle(fontSize: 16)
+                    ),
                   );
                 },
               ),
@@ -167,21 +165,44 @@ class _EcmpFormState extends State<EcmpForm> {
       ),
     );
   }
+
+  /// **CORRECTED LOGIC**
+  /// Safely updates the list of controllers based on the BLoC state.
+  void _updateControllersFromState(List<String> newGateways) {
+    // First, dispose all existing controllers to prevent memory leaks.
+    for (final controller in _gatewayControllers) {
+      controller.dispose();
+    }
+    _gatewayControllers.clear();
+
+    // Create new controllers for each gateway found on the router.
+    for (final ip in newGateways) {
+      _gatewayControllers.add(TextEditingController(text: ip));
+    }
+
+    // **MODIFIED:** If the list is empty after checking the router, 
+    // add one blank field to give the user a starting point.
+    if (_gatewayControllers.isEmpty) {
+      _gatewayControllers.add(TextEditingController());
+    }
+
+    // Trigger a rebuild to show the new set of controllers.
+    if(mounted) {
+      setState(() {});
+    }
+  }
 }
 
-// **REFACTORED WIDGET**
+/// **CORRECTED AND OPTIMIZED WIDGET**
+/// This widget is now structured to only rebuild the necessary parts on ping updates.
 class _GatewayInputField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
-  final String hint;
-  final String? Function(String?)? validator;
 
   const _GatewayInputField({
-    super.key, // Use super.key
+    super.key,
     required this.controller,
     required this.label,
-    required this.hint,
-    this.validator,
   });
 
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
@@ -199,96 +220,117 @@ class _GatewayInputField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // This ValueListenableBuilder listens to the text field controller
-    return ValueListenableBuilder<TextEditingValue>(
-      valueListenable: controller,
-      builder: (context, value, child) {
-        // This BlocBuilder listens for ping results from the BLoC state
-        return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // The TextFormField is no longer inside a BlocBuilder that listens to pings.
+        TextFormField(
+          controller: controller,
+          validator: (value) {
+            final text = value?.trim() ?? '';
+            if (text.isNotEmpty && !_isValidIp(text)) {
+              return 'Invalid IP address format';
+            }
+            return null;
+          },
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: 'e.g., 192.168.1.1',
+            border: const OutlineInputBorder(),
+            // The suffix icon IS rebuilt based on ping status.
+            suffixIcon: BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+              buildWhen: (prev, curr) {
+                // Rebuild only if the ping status for THIS specific IP changes.
+                final ip = controller.text.trim();
+                return prev.pingingIp == ip || curr.pingingIp == ip || prev.pingResults[ip] != curr.pingResults[ip];
+              },
+              builder: (context, state) {
+                final ipAddress = controller.text.trim();
+                final isPinging = state.pingingIp == ipAddress;
+                final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
+
+                if (isPinging) {
+                  return const Padding(
+                    padding: EdgeInsets.all(12.0),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  );
+                }
+                return IconButton(
+                  icon: const Icon(Icons.network_ping),
+                  tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
+                  onPressed: canPing
+                      ? () {
+                          context
+                              .read<LoadBalancingBloc>()
+                              .add(events.PingGatewayRequested(ipAddress));
+                        }
+                      : null,
+                );
+              },
+            ),
+          ),
+        ),
+        // The ping result box IS also rebuilt based on ping status.
+        BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+           buildWhen: (prev, curr) {
+                final ip = controller.text.trim();
+                return prev.pingResults[ip] != curr.pingResults[ip];
+              },
           builder: (context, state) {
             final ipAddress = controller.text.trim();
             final pingResult = state.pingResults[ipAddress];
-            final isPinging = state.pingingIp == ipAddress;
-            final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextFormField(
-                  controller: controller,
-                  validator: validator,
-                  decoration: InputDecoration(
-                    labelText: label,
-                    hintText: hint,
-                    border: const OutlineInputBorder(),
-                    suffixIcon: isPinging
-                        ? const Padding(
-                            padding: EdgeInsets.all(12.0),
-                            child: SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          )
-                        : IconButton(
-                            icon: const Icon(Icons.network_ping),
-                            tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
-                            onPressed: canPing
-                                ? () {
-                                    context
-                                        .read<LoadBalancingBloc>()
-                                        .add(events.PingGatewayRequested(ipAddress));
-                                  }
-                                : null,
-                          ),
+            if (pingResult == null) {
+              return const SizedBox.shrink(); // Return nothing if there is no result
+            }
+            return Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: pingResult.toLowerCase().contains('success')
+                      ? Colors.green.withAlpha(30)
+                      : Colors.orange.withAlpha(30),
+                  border: Border.all(
+                    color: pingResult.toLowerCase().contains('success')
+                        ? Colors.green
+                        : Colors.orange,
                   ),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                if (pingResult != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
+                child: Row(
+                  children: [
+                    Icon(
+                      pingResult.toLowerCase().contains('success')
+                          ? Icons.check_circle
+                          : Icons.warning,
+                      size: 16,
                       color: pingResult.toLowerCase().contains('success')
-                          ? Colors.green.withAlpha(30)
-                          : Colors.orange.withAlpha(30),
-                      border: Border.all(
-                        color: pingResult.toLowerCase().contains('success')
-                            ? Colors.green
-                            : Colors.orange,
-                      ),
-                      borderRadius: BorderRadius.circular(8),
+                          ? Colors.green
+                          : Colors.orange,
                     ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          pingResult.toLowerCase().contains('success')
-                              ? Icons.check_circle
-                              : Icons.warning,
-                          size: 16,
-                          color: pingResult.toLowerCase().contains('success')
-                              ? Colors.green
-                              : Colors.orange,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(pingResult)),
-                        IconButton(
-                          icon: const Icon(Icons.close, size: 16),
-                          onPressed: () {
-                            context
-                                .read<LoadBalancingBloc>()
-                                .add(events.ClearPingResult(ipAddress));
-                          },
-                          tooltip: 'Clear Result',
-                        ),
-                      ],
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(pingResult)),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () {
+                        context
+                            .read<LoadBalancingBloc>()
+                            .add(events.ClearPingResult(ipAddress));
+                      },
+                      tooltip: 'Clear Result',
                     ),
-                  ),
-                ],
-              ],
+                  ],
+                ),
+              ),
             );
           },
-        );
-      },
+        ),
+      ],
     );
   }
 }

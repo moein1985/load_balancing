@@ -19,7 +19,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
 
   // Manage concurrent ping operations
   final Map<String, Timer> _pingTimers = {};
-
   LoadBalancingBloc({
     required this.getInterfaces,
     required this.getRoutingTable,
@@ -31,7 +30,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     on<events.FetchRoutingTableRequested>(_onFetchRoutingTable);
     on<events.PingGatewayRequested>(_onPingGateway);
     on<events.LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
-    // Use the prefixed event name here
     on<events.ApplyEcmpConfig>(_onApplyEcmpConfig);
     on<events.ClearPingResult>(_onClearPingResult);
   }
@@ -52,10 +50,52 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
 
+  /// Helper method to parse gateway IPs from the 'show ip route' command output.
+  /// THIS METHOD HAS BEEN CORRECTED AND MADE MORE ROBUST.
+  List<String> _parseEcmpGateways(String routingTable) {
+    final gateways = <String>{}; // Use a Set to handle duplicates automatically.
+    
+    // A more robust regex that looks for the 'via' keyword after a default route pattern.
+    // This handles variations in spacing and formatting.
+    final ecmpRegex = RegExp(r'0\.0\.0\.0/0\s.*via\s+([\d\.]+)');
+    final subsequentLineRegex = RegExp(r'^\s*\[\d+/\d+\]\s+via\s+([\d\.]+)');
+
+    final lines = routingTable.split('\n');
+    bool inEcmpBlock = false;
+
+    for (final line in lines) {
+      if (line.contains('0.0.0.0/0')) {
+        final match = ecmpRegex.firstMatch(line);
+        if (match != null) {
+          gateways.add(match.group(1)!);
+          inEcmpBlock = true; // Once we find the first line, we enter the block
+          continue; // Move to the next line
+        }
+      }
+
+      // If we are in an ECMP block, check for subsequent indented lines
+      if (inEcmpBlock) {
+        final match = subsequentLineRegex.firstMatch(line);
+        if (match != null) {
+          gateways.add(match.group(1)!);
+        } else if (line.trim().isNotEmpty && !line.trim().startsWith('[')) {
+          // If the line is not empty and doesn't start with '[', the ECMP block has ended.
+          inEcmpBlock = false;
+        }
+      }
+    }
+
+    _logDebug('Parsed ECMP gateways (Corrected): ${gateways.toList()}');
+    return gateways.toList();
+  }
+
+
   void _onScreenStarted(events.ScreenStarted event, Emitter<LoadBalancingState> emit) {
     _logDebug('Screen started - IP: ${event.credentials.ip}');
     emit(state.copyWith(credentials: event.credentials));
+    // Fetch both interfaces and routing table when the screen starts.
     add(events.FetchInterfacesRequested());
+    add(events.FetchRoutingTableRequested());
   }
 
   void _onLoadBalancingTypeSelected(
@@ -124,10 +164,15 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     ));
     try {
       final table = await getRoutingTable(state.credentials!);
-      _logDebug('Routing table received');
+      // After fetching the table, parse it to find existing gateways.
+      final gateways = _parseEcmpGateways(table);
+      _logDebug('Routing table received, ${gateways.length} ECMP gateways found.');
+      
+      // Emit the new state with both the raw table and the parsed gateways.
       emit(state.copyWith(
         routingTable: table,
         routingTableStatus: DataStatus.success,
+        initialEcmpGateways: gateways,
       ));
     } on ServerFailure catch (e) {
       _logDebug('Error fetching routing table: ${e.message}');
@@ -189,7 +234,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       
       final newPingResults = Map<String, String>.from(state.pingResults);
       newPingResults[ipAddress] = result;
-      
       emit(state.copyWith(
         pingResults: newPingResults,
         pingStatus: DataStatus.success,
@@ -199,10 +243,8 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       _logDebug('Error during ping for $ipAddress: $e');
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
-      
       final newPingResults = Map<String, String>.from(state.pingResults);
       newPingResults[ipAddress] = 'Ping Error: ${e.toString()}';
-      
       emit(state.copyWith(
         pingResults: newPingResults,
         pingStatus: DataStatus.failure,
@@ -221,18 +263,27 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
 
     _logDebug('Starting to apply ECMP config');
-    // Log the list of gateways
-    _logDebug('Gateways: ${event.gateways.join(", ")}');
     
+    // Get the initial list from the state and the final list from the UI event.
+    final initialGateways = state.initialEcmpGateways;
+    final finalGateways = event.finalGateways;
+    _logDebug('Initial Gateways: $initialGateways');
+    _logDebug('Final Gateways: $finalGateways');
+
+    // The smart diff logic to determine what to add and what to remove.
+    final gatewaysToAdd = finalGateways.where((g) => !initialGateways.contains(g)).toList();
+    final gatewaysToRemove = initialGateways.where((g) => !finalGateways.contains(g)).toList();
+
+    _logDebug('Gateways to Add: $gatewaysToAdd');
+    _logDebug('Gateways to Remove: $gatewaysToRemove');
+
     emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
-    
     try {
-      // Pass the list of gateways to the use case
       final result = await applyEcmpConfig(
         credentials: state.credentials!,
-        gateways: event.gateways,
+        gatewaysToAdd: gatewaysToAdd,
+      gatewaysToRemove: gatewaysToRemove,
       );
-
       _logDebug('ECMP config apply result: $result');
       
       if (result.toLowerCase().contains('fail') || result.toLowerCase().contains('error')) {
@@ -245,6 +296,8 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
             status: DataStatus.success,
             successMessage: result,
           ));
+         // After a successful operation, refresh the routing table to reflect the new state in the UI.
+         add(events.FetchRoutingTableRequested());
       }
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');

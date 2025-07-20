@@ -151,8 +151,11 @@ abstract class RemoteDataSource {
   Future<List<RouterInterface>> fetchInterfaces(DeviceCredentials credentials);
   Future<String> getRoutingTable(DeviceCredentials credentials);
   Future<String> pingGateway(DeviceCredentials credentials, String ipAddress);
-  // New method to apply ECMP configuration
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2);
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  });
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource_impl.dart ---
@@ -203,7 +206,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final briefLines = briefResult.split('\n');
     final briefRegex = RegExp(
         r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)');
-    
     // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
@@ -223,7 +225,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
     // Then, find secondary addresses from the detailed config
     final secondaryIps = _extractSecondaryIps(detailedResult);
-    
     // Build the final interface list
     for (final interface in mainInterfaces) {
       final interfaceName = interface['name']!;
@@ -236,7 +237,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
         ipAddress: primaryIp,
         status: status,
       ));
-      
       // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
@@ -255,7 +255,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   Map<String, List<String>> _extractSecondaryIps(String configOutput) {
     final secondaryIps = <String, List<String>>{};
     final lines = configOutput.split('\n');
-    String? currentInterface;
+    String?
+    currentInterface;
 
     for (final line in lines) {
       final trimmedLine = line.trim();
@@ -368,15 +369,26 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     return await _restApiHandler.checkCredentials(credentials);
   }
 
-  // Implementation for the new ECMP method
   @override
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
     _logDebug('Applying ECMP config - ${credentials.type}');
     try {
-       if (credentials.type == ConnectionType.ssh) {
-        return await _sshHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+      if (credentials.type == ConnectionType.ssh) {
+        return await _sshHandler.applyEcmpConfig(
+          credentials: credentials,
+          gatewaysToAdd: gatewaysToAdd,
+          gatewaysToRemove: gatewaysToRemove,
+        );
       } else if (credentials.type == ConnectionType.telnet) {
-        return await _telnetHandler.applyEcmpConfig(credentials, gateway1, gateway2);
+        return await _telnetHandler.applyEcmpConfig(
+          credentials: credentials,
+          gatewaysToAdd: gatewaysToAdd,
+          gatewaysToRemove: gatewaysToRemove,
+        );
       } else {
         return 'Configuration via REST API is not yet supported.';
       }
@@ -500,15 +512,21 @@ class SshClientHandler {
       return client;
     } on TimeoutException {
       _logDebug('Error: SSH connection timed out');
-      throw const ServerFailure('Connection timed out. Please check the IP address and port.');
+      throw const ServerFailure(
+        'Connection timed out. Please check the IP address and port.',
+      );
     } on SocketException catch (e) {
       _logDebug('Error: SSH connection failed - ${e.message}');
-      throw const ServerFailure('Unable to connect to the device. Check the IP address and port.');
+      throw const ServerFailure(
+        'Unable to connect to the device. Check the IP address and port.',
+      );
     } catch (e) {
       final errorMsg = e.toString().toLowerCase();
       if (errorMsg.contains('auth')) {
         _logDebug('Error: SSH authentication failed');
-        throw const ServerFailure('Authentication failed. Check your username and password.');
+        throw const ServerFailure(
+          'Authentication failed. Check your username and password.',
+        );
       }
       _logDebug('Error: SSH - $e');
       throw ServerFailure('SSH Error: ${e.toString()}');
@@ -528,14 +546,14 @@ class SshClientHandler {
     }
   }
 
-  Future<String> _executeSshCommandsWithShell(SSHClient client, List<String> commands) async {
+  Future<String> _executeSshCommandsWithShell(
+    SSHClient client,
+    List<String> commands,
+  ) async {
     _logDebug('Starting execution of SSH commands with Shell');
     try {
       final shell = await client.shell(
-        pty: SSHPtyConfig(
-          width: 80,
-          height: 24,
-        ),
+        pty: SSHPtyConfig(width: 80, height: 24),
       );
       final completer = Completer<String>();
       final output = StringBuffer();
@@ -553,7 +571,9 @@ class SshClientHandler {
 
       shell.stdout.cast<List<int>>().transform(utf8.decoder).listen((data) {
         output.write(data);
-        _logDebug('SSH Shell Output: ${data.replaceAll('\r\n', '\\n').replaceAll('\n', '\\n')}');
+        _logDebug(
+          'SSH Shell Output: ${data.replaceAll('\r\n', '\\n').replaceAll('\n', '\\n')}',
+        );
 
         // Wait for the prompt before sending the first command
         if (!isReady && (data.contains('#') || data.contains('>'))) {
@@ -573,20 +593,19 @@ class SshClientHandler {
           }
         }
       });
-
       shell.stderr.cast<List<int>>().transform(utf8.decoder).listen((data) {
         _logDebug('SSH Shell Error: $data');
         output.write(data);
       });
-
       // General timeout for the whole operation
       Timer(_commandTimeout, () {
         if (!completer.isCompleted) {
           shell.close();
-          completer.completeError(TimeoutException('SSH Shell operation timed out', _commandTimeout));
+          completer.completeError(
+            TimeoutException('SSH Shell operation timed out', _commandTimeout),
+          );
         }
       });
-
       return await completer.future;
     } catch (e) {
       _logDebug('Error in SSH Shell: $e');
@@ -598,7 +617,10 @@ class SshClientHandler {
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final result = await _executeSshCommand(client, 'show ip interface brief');
+      final result = await _executeSshCommand(
+        client,
+        'show ip interface brief',
+      );
       _logDebug('SSH interfaces fetched');
       return result;
     } catch (e) {
@@ -610,7 +632,8 @@ class SshClientHandler {
   }
 
   Future<String> fetchDetailedInterfaces(DeviceCredentials credentials) async {
-    SSHClient? client;
+    SSHClient?
+    client;
     try {
       client = await _createSshClient(credentials);
       final result = await _executeSshCommand(client, 'show running-config');
@@ -629,8 +652,10 @@ class SshClientHandler {
     try {
       client = await _createSshClient(credentials);
       try {
-        final result = await _executeSshCommandsWithShell(
-            client, ['terminal length 0', 'show ip route']);
+        final result = await _executeSshCommandsWithShell(client, [
+          'terminal length 0',
+          'show ip route',
+        ]);
         _logDebug('SSH routing table fetched with Shell');
         return result;
       } catch (e) {
@@ -649,13 +674,18 @@ class SshClientHandler {
     }
   }
 
-  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress) async {
+  Future<String> pingGateway(
+    DeviceCredentials credentials,
+    String ipAddress,
+  ) async {
     _logDebug('Starting SSH ping for IP: $ipAddress');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final result = await _executeSshCommand(client, 'ping $ipAddress repeat 5');
-
+      final result = await _executeSshCommand(
+        client,
+        'ping $ipAddress repeat 5',
+      );
       _logDebug('SSH ping result received');
       return _analyzePingResult(result);
     } finally {
@@ -681,26 +711,47 @@ class SshClientHandler {
     return 'Ping failed. Check the IP or connection.';
   }
 
-  // New method to apply ECMP configuration
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
-    _logDebug('Applying ECMP config for gateways: $gateway1, $gateway2');
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
+    _logDebug('Applying ECMP config. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final commands = [
-        'configure terminal',
-        'ip route 0.0.0.0 0.0.0.0 $gateway1',
-        'ip route 0.0.0.0 0.0.0.0 $gateway2',
-        'end'
-      ];
+      final List<String> commands = ['configure terminal'];
+
+      // Generate commands to remove old gateways
+      for (final gateway in gatewaysToRemove) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+
+      // Generate commands to add new gateways
+      for (final gateway in gatewaysToAdd) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+      commands.add('end');
+
+      // Do nothing if there are no gateways to add or remove
+      if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
+        _logDebug('No changes to apply for ECMP config.');
+        return 'No ECMP configuration changes were needed.';
+      }
+
       final result = await _executeSshCommandsWithShell(client, commands);
       _logDebug('ECMP config commands executed');
 
-      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
-          _logDebug('Error applying ECMP config: $result');
-          return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      if (result.toLowerCase().contains('invalid input') ||
+          result.toLowerCase().contains('error')) {
+        _logDebug('Error applying ECMP config: $result');
+        return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
       }
-      
+
       return 'ECMP configuration applied successfully.';
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');
@@ -743,7 +794,6 @@ class TelnetClientHandler {
     // Prepend 'terminal length 0' to avoid pagination
     final allCommands = ['terminal length 0', ...commands];
     Timer? timeoutTimer;
-
     // Setup timeout timer for the whole operation
     timeoutTimer = Timer(_commandTimeout, () {
       _logDebug('Telnet operation timed out');
@@ -752,7 +802,6 @@ class TelnetClientHandler {
         completer.completeError(const ServerFailure("Telnet operation timed out."));
       }
     });
-
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -870,7 +919,6 @@ class TelnetClientHandler {
         completer.complete('Timeout. Gateway is not reachable.');
       }
     });
-
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -894,7 +942,6 @@ class TelnetClientHandler {
         }
       },
     );
-
     try {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text;
@@ -1019,30 +1066,50 @@ class TelnetClientHandler {
     return await _executeTelnetPing(credentials, ipAddress);
   }
   
-  // New method to apply ECMP configuration via Telnet
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, String gateway1, String gateway2) async {
-    _logDebug('Applying ECMP config via Telnet for gateways: $gateway1, $gateway2');
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
+    _logDebug('Applying ECMP config via Telnet. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
     try {
-       final commands = [
-        'configure terminal',
-        'ip route 0.0.0.0 0.0.0.0 $gateway1',
-        'ip route 0.0.0.0 0.0.0.0 $gateway2',
-        'end'
-      ];
-      // We don't need 'terminal length 0' here, as _executeTelnetCommands adds it.
-      // We pass the commands directly.
-      final result = await _executeTelnetCommands(credentials, commands.sublist(1));
-       _logDebug('ECMP config commands sent via Telnet');
+      // Dynamically build the list of commands
+      final List<String> commands = ['configure terminal'];
+
+      // Generate commands to remove old gateways
+      for (final gateway in gatewaysToRemove) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+
+      // Generate commands to add new gateways
+      for (final gateway in gatewaysToAdd) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+      commands.add('end');
+
+      // Do nothing if there are no gateways to add or remove
+      if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
+        _logDebug('No changes to apply for ECMP config via Telnet.');
+        return 'No ECMP configuration changes were needed.';
+      }
+
+      // _executeTelnetCommands already adds 'terminal length 0'
+      final result = await _executeTelnetCommands(credentials, commands);
+      _logDebug('ECMP config commands sent via Telnet');
 
       if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
-          _logDebug('Error applying ECMP config via Telnet: $result');
-          return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+        _logDebug('Error applying ECMP config via Telnet: $result');
+        return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
       }
 
       return 'ECMP configuration applied successfully.';
     } catch (e) {
-       _logDebug('Error applying ECMP config via Telnet: $e');
-       return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+      _logDebug('Error applying ECMP config via Telnet: $e');
+      return 'An error occurred while applying ECMP configuration: ${e.toString()}';
     }
   }
 }
@@ -1081,7 +1148,8 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<List<RouterInterface>> getInterfaces(
-      DeviceCredentials credentials) async {
+    DeviceCredentials credentials,
+  ) async {
     try {
       return await remoteDataSource.fetchInterfaces(credentials);
     } on ServerFailure catch (e) {
@@ -1103,9 +1171,10 @@ class DeviceRepositoryImpl implements DeviceRepository {
   }
 
   @override
-  Future<String> pingGateway(
-      {required DeviceCredentials credentials,
-      required String ipAddress}) async {
+  Future<String> pingGateway({
+    required DeviceCredentials credentials,
+    required String ipAddress,
+  }) async {
     try {
       return await remoteDataSource.pingGateway(credentials, ipAddress);
     } on ServerFailure catch (e) {
@@ -1115,14 +1184,19 @@ class DeviceRepositoryImpl implements DeviceRepository {
     }
   }
 
-  // Implementation for the new ECMP method
   @override
-  Future<String> applyEcmpConfig(
-      {required DeviceCredentials credentials,
-      required String gateway1,
-      required String gateway2}) async {
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
     try {
-      return await remoteDataSource.applyEcmpConfig(credentials, gateway1, gateway2);
+      // Pass the call with the new parameters to the data source
+      return await remoteDataSource.applyEcmpConfig(
+        credentials: credentials,
+        gatewaysToAdd: gatewaysToAdd,
+        gatewaysToRemove: gatewaysToRemove,
+      );
     } on ServerFailure catch (e) {
       return e.message;
     } catch (e) {
@@ -1272,11 +1346,14 @@ abstract class DeviceRepository {
     required DeviceCredentials credentials,
     required String ipAddress,
   });
-  // New method to apply ECMP configuration
+  
+  /// Applies the ECMP configuration to the device.
+  ///
+  /// Takes a list of gateways to add and a list of gateways to remove.
   Future<String> applyEcmpConfig({
     required DeviceCredentials credentials,
-    required String gateway1,
-    required String gateway2,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
   });
 }
 
@@ -1291,15 +1368,17 @@ class ApplyEcmpConfig {
 
   ApplyEcmpConfig(this.repository);
 
+  /// Executes the use case to apply ECMP configuration.
   Future<String> call({
     required DeviceCredentials credentials,
-    required String gateway1,
-    required String gateway2,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
   }) async {
+    // Pass both lists to the repository's method
     return await repository.applyEcmpConfig(
       credentials: credentials,
-      gateway1: gateway1,
-      gateway2: gateway2,
+      gatewaysToAdd: gatewaysToAdd,
+      gatewaysToRemove: gatewaysToRemove,
     );
   }
 }
@@ -1521,7 +1600,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     on<events.FetchRoutingTableRequested>(_onFetchRoutingTable);
     on<events.PingGatewayRequested>(_onPingGateway);
     on<events.LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
-    // Use the prefixed event name here
     on<events.ApplyEcmpConfig>(_onApplyEcmpConfig);
     on<events.ClearPingResult>(_onClearPingResult);
   }
@@ -1542,10 +1620,56 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
 
+  /// Helper method to parse gateway IPs from the 'show ip route' command output.
+  List<String> _parseEcmpGateways(String routingTable) {
+    final gateways = <String>{}; // Use a Set to handle duplicates automatically.
+    
+    // Regex for single-line ECMP entries: S* 0.0.0.0/0 [1/0] via 1.2.3.4
+    final singleLineRegex = RegExp(r'S\*\s+0\.0\.0\.0/0\s+\[\d+/\d+\]\s+via\s+([\d\.]+)');
+    
+    // Regex for multi-line ECMP entries (for the lines after the first one)
+    // Example:
+    // S* 0.0.0.0/0 [1/0] via 192.168.1.1
+    //              [1/0] via 192.168.2.1
+    final multiLineRegex = RegExp(r'^\s+\[\d+/\d+\]\s+via\s+([\d\.]+)');
+    
+    final lines = routingTable.split('\n');
+    bool isEcmpBlock = false;
+
+    for (final line in lines) {
+      final trimmedLine = line.trim();
+      
+      // Check for the start of a default static route
+      if (trimmedLine.startsWith('S* 0.0.0.0/0')) {
+        isEcmpBlock = true;
+        final match = singleLineRegex.firstMatch(trimmedLine);
+        if (match != null) {
+          gateways.add(match.group(1)!);
+        }
+      } 
+      // If we are inside an ECMP block, check for subsequent gateway lines
+      else if (isEcmpBlock) {
+        final match = multiLineRegex.firstMatch(line); // Use original line for indentation
+        if (match != null) {
+          gateways.add(match.group(1)!);
+        } else {
+          // If the line doesn't match the multi-line format, the ECMP block has ended.
+          isEcmpBlock = false;
+        }
+      }
+    }
+
+    _logDebug('Parsed ECMP gateways: ${gateways.toList()}');
+    return gateways.toList();
+  }
+
+
   void _onScreenStarted(events.ScreenStarted event, Emitter<LoadBalancingState> emit) {
     _logDebug('Screen started - IP: ${event.credentials.ip}');
     emit(state.copyWith(credentials: event.credentials));
+    // Fetch both interfaces and routing table when the screen starts.
     add(events.FetchInterfacesRequested());
+    add(events.FetchRoutingTableRequested());
   }
 
   void _onLoadBalancingTypeSelected(
@@ -1614,10 +1738,15 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     ));
     try {
       final table = await getRoutingTable(state.credentials!);
-      _logDebug('Routing table received');
+      // After fetching the table, parse it to find existing gateways.
+      final gateways = _parseEcmpGateways(table);
+      _logDebug('Routing table received, ${gateways.length} ECMP gateways found.');
+      
+      // Emit the new state with both the raw table and the parsed gateways.
       emit(state.copyWith(
         routingTable: table,
         routingTableStatus: DataStatus.success,
+        initialEcmpGateways: gateways,
       ));
     } on ServerFailure catch (e) {
       _logDebug('Error fetching routing table: ${e.message}');
@@ -1679,7 +1808,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       
       final newPingResults = Map<String, String>.from(state.pingResults);
       newPingResults[ipAddress] = result;
-      
       emit(state.copyWith(
         pingResults: newPingResults,
         pingStatus: DataStatus.success,
@@ -1689,10 +1817,8 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       _logDebug('Error during ping for $ipAddress: $e');
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
-      
       final newPingResults = Map<String, String>.from(state.pingResults);
       newPingResults[ipAddress] = 'Ping Error: ${e.toString()}';
-      
       emit(state.copyWith(
         pingResults: newPingResults,
         pingStatus: DataStatus.failure,
@@ -1701,9 +1827,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
 
-  // Updated handler for applying ECMP configuration
   Future<void> _onApplyEcmpConfig(
-    // Use the prefixed event name here
     events.ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
@@ -1713,23 +1837,29 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
 
     _logDebug('Starting to apply ECMP config');
-    _logDebug('Gateway 1: ${event.gateway1}');
-    _logDebug('Gateway 2: ${event.gateway2}');
     
-    // Set loading state and clear any previous success/error messages
+    // Get the initial list from the state and the final list from the UI event.
+    final initialGateways = state.initialEcmpGateways;
+    final finalGateways = event.finalGateways;
+    _logDebug('Initial Gateways: $initialGateways');
+    _logDebug('Final Gateways: $finalGateways');
+
+    // The smart diff logic to determine what to add and what to remove.
+    final gatewaysToAdd = finalGateways.where((g) => !initialGateways.contains(g)).toList();
+    final gatewaysToRemove = initialGateways.where((g) => !finalGateways.contains(g)).toList();
+
+    _logDebug('Gateways to Add: $gatewaysToAdd');
+    _logDebug('Gateways to Remove: $gatewaysToRemove');
+
     emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
-    
     try {
-      // This is the Use Case class, no prefix needed
       final result = await applyEcmpConfig(
         credentials: state.credentials!,
-        gateway1: event.gateway1,
-        gateway2: event.gateway2,
+        gatewaysToAdd: gatewaysToAdd,
+      gatewaysToRemove: gatewaysToRemove,
       );
-
       _logDebug('ECMP config apply result: $result');
       
-      // Check result message for success or failure keywords
       if (result.toLowerCase().contains('fail') || result.toLowerCase().contains('error')) {
          emit(state.copyWith(
             status: DataStatus.failure,
@@ -1740,6 +1870,8 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
             status: DataStatus.success,
             successMessage: result,
           ));
+         // After a successful operation, refresh the routing table to reflect the new state in the UI.
+         add(events.FetchRoutingTableRequested());
       }
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');
@@ -1797,11 +1929,11 @@ class ClearPingResult extends LoadBalancingEvent {
 }
 
 class ApplyEcmpConfig extends LoadBalancingEvent {
-  final String gateway1;
-  final String gateway2;
-  const ApplyEcmpConfig({required this.gateway1, required this.gateway2});
+  // Renamed for clarity: this is the final list of gateways from the UI.
+  final List<String> finalGateways; 
+  const ApplyEcmpConfig({required this.finalGateways});
   @override
-  List<Object> get props => [gateway1, gateway2];
+  List<Object> get props => [finalGateways];
 }
 
 class ApplyPbrConfig extends LoadBalancingEvent {
@@ -1824,16 +1956,19 @@ enum DataStatus { initial, loading, success, failure }
 
 class LoadBalancingState extends Equatable {
   // Holds the credentials to be used for each request
-  final DeviceCredentials? credentials; 
+  final DeviceCredentials? credentials;
   final LoadBalancingType type;
   // General status for operations like applying configs
-  final DataStatus status; 
+  final DataStatus status;
   final String error;
   // Specific message for successful operations
-  final String? successMessage; 
+  final String? successMessage;
 
   final List<RouterInterface> interfaces;
   final DataStatus interfacesStatus;
+
+  // This new property holds the list of ECMP gateways read from the router.
+  final List<String> initialEcmpGateways;
 
   final String? routingTable;
   final DataStatus routingTableStatus;
@@ -1850,6 +1985,7 @@ class LoadBalancingState extends Equatable {
     this.successMessage,
     this.interfaces = const [],
     this.interfacesStatus = DataStatus.initial,
+    this.initialEcmpGateways = const [], // Initialize as empty list
     this.routingTable,
     this.routingTableStatus = DataStatus.initial,
     this.pingResults = const {},
@@ -1866,12 +2002,13 @@ class LoadBalancingState extends Equatable {
     bool clearSuccessMessage = false,
     List<RouterInterface>? interfaces,
     DataStatus? interfacesStatus,
+    List<String>? initialEcmpGateways, // Add to copyWith
     String? routingTable,
+    bool clearRoutingTable = false,
     DataStatus? routingTableStatus,
     Map<String, String>? pingResults,
     DataStatus? pingStatus,
     String? pingingIp,
-    bool clearRoutingTable = false,
   }) {
     return LoadBalancingState(
       credentials: credentials ?? this.credentials,
@@ -1883,6 +2020,7 @@ class LoadBalancingState extends Equatable {
       successMessage: clearSuccessMessage ? null : successMessage ?? this.successMessage,
       interfaces: interfaces ?? this.interfaces,
       interfacesStatus: interfacesStatus ?? this.interfacesStatus,
+      initialEcmpGateways: initialEcmpGateways ?? this.initialEcmpGateways, // Add to copyWith
       routingTable: clearRoutingTable ? null : routingTable ?? this.routingTable,
       routingTableStatus: routingTableStatus ?? this.routingTableStatus,
       pingResults: pingResults ?? this.pingResults,
@@ -1894,6 +2032,7 @@ class LoadBalancingState extends Equatable {
   @override
   List<Object?> get props => [
         credentials, type, status, error, successMessage, interfaces, interfacesStatus,
+        initialEcmpGateways, // Add to props for Equatable
         routingTable, routingTableStatus, pingResults, pingStatus, pingingIp
       ];
 }
@@ -2370,7 +2509,7 @@ class _RouterInfoSection extends StatelessWidget {
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
-import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart' as events;
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 
 class EcmpForm extends StatefulWidget {
@@ -2382,36 +2521,52 @@ class EcmpForm extends StatefulWidget {
 
 class _EcmpFormState extends State<EcmpForm> {
   final _formKey = GlobalKey<FormState>();
-  final _gateway1Controller = TextEditingController();
-  final _gateway2Controller = TextEditingController();
-  // IP validation regex
-  static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
+  final List<TextEditingController> _gatewayControllers = [];
 
   @override
   void dispose() {
-    _gateway1Controller.dispose();
-    _gateway2Controller.dispose();
+    // Ensure all dynamically created controllers are disposed
+    for (final controller in _gatewayControllers) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
-  bool _isValidIp(String ip) {
-    if (!_ipRegex.hasMatch(ip)) return false;
+  void _addGatewayField() {
+    setState(() {
+      _gatewayControllers.add(TextEditingController());
+    });
+  }
 
-    final parts = ip.split('.');
-    for (final part in parts) {
-      final num = int.tryParse(part);
-      if (num == null || num < 0 || num > 255) return false;
-    }
-    return true;
+  void _removeGatewayField(int index) {
+    // Dispose the controller before removing it from the list
+    _gatewayControllers[index].dispose();
+    setState(() {
+      _gatewayControllers.removeAt(index);
+    });
   }
 
   void _applyEcmpConfig() {
     if (_formKey.currentState!.validate()) {
+      // Collect the final list of gateways from the UI controllers.
+      // The BLoC will handle the comparison.
+      final gateways = _gatewayControllers
+          .map((controller) => controller.text.trim())
+          .where((ip) => ip.isNotEmpty) // Filter out empty fields
+          .toList();
+      
+      // The logic for requiring at least two gateways can be handled here or by the router itself.
+      // For flexibility (allowing removal of all routes), we can relax this check.
+      // if (gateways.length < 2) {
+      //   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      //     content: Text('At least two gateways are required for ECMP. To remove all, clear all fields.'),
+      //     backgroundColor: Colors.orange,
+      //   ));
+      //   return;
+      // }
+
       context.read<LoadBalancingBloc>().add(
-            ApplyEcmpConfig(
-              gateway1: _gateway1Controller.text.trim(),
-              gateway2: _gateway2Controller.text.trim(),
-            ),
+            events.ApplyEcmpConfig(finalGateways: gateways),
           );
     }
   }
@@ -2434,53 +2589,99 @@ class _EcmpFormState extends State<EcmpForm> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Enter the IP addresses of your internet gateways. Traffic will be distributed equally between them.',
+                'Enter gateway IPs. The app will automatically detect existing gateways. Edit, add, or clear fields to update the configuration.',
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-              _GatewayInputField(
-                controller: _gateway1Controller,
-                label: 'Gateway 1',
-                hint: 'e.g., 192.168.1.1',
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Gateway 1 IP address is required';
+
+              // BlocConsumer handles both listening to state changes and building the UI
+              BlocConsumer<LoadBalancingBloc, LoadBalancingState>(
+                // Listen only when the list of initial gateways changes
+                listenWhen: (prev, curr) => prev.initialEcmpGateways != curr.initialEcmpGateways,
+                listener: (context, state) {
+                  _updateControllersFromState(state.initialEcmpGateways);
+                },
+                // Build the UI based on the current state
+                buildWhen: (prev, curr) => 
+                    prev.initialEcmpGateways != curr.initialEcmpGateways || 
+                    prev.routingTableStatus != curr.routingTableStatus,
+                builder: (context, state) {
+                  // Show a loading indicator while the config is being read for the first time
+                  if (state.routingTableStatus == DataStatus.loading && _gatewayControllers.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 20.0),
+                      child: Center(child: Text("Reading router configuration...")),
+                    );
                   }
-                  if (!_isValidIp(value.trim())) {
-                    return 'Invalid IP address format';
-                  }
-                  return null;
+                  
+                  // Once loaded, build the dynamic list of fields
+                  return ListView.separated(
+                    physics: const NeverScrollableScrollPhysics(),
+                    shrinkWrap: true,
+                    itemCount: _gatewayControllers.length,
+                    itemBuilder: (context, index) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: _GatewayInputField(
+                              key: ValueKey('gateway_field_$index'), // More stable key
+                              controller: _gatewayControllers[index],
+                              label: 'Gateway ${index + 1}',
+                              hint: 'e.g., 192.168.${index + 1}.1',
+                              validator: (value) {
+                                final text = value?.trim() ?? '';
+                                // Validation is now optional unless it's one of the first two fields AND they are both empty.
+                                if (text.isNotEmpty && !_isValidIp(text)) {
+                                  return 'Invalid IP address format';
+                                }
+                                return null;
+                              },
+                            ),
+                          ),
+                          // Allow removing fields only if there are more than 2
+                          if (_gatewayControllers.length > 2)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8.0, top: 8.0),
+                              child: IconButton(
+                                icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent),
+                                onPressed: () => _removeGatewayField(index),
+                                tooltip: 'Remove Gateway',
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                    separatorBuilder: (context, index) => const SizedBox(height: 16),
+                  );
                 },
               ),
               const SizedBox(height: 16),
-              _GatewayInputField(
-                controller: _gateway2Controller,
-                label: 'Gateway 2',
-                hint: 'e.g., 192.168.2.1',
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Gateway 2 IP address is required';
-                  }
-                  if (!_isValidIp(value.trim())) {
-                    return 'Invalid IP address format';
-                  }
-                  if (value.trim() == _gateway1Controller.text.trim()) {
-                    return 'Gateway 2 cannot be the same as Gateway 1';
-                  }
-                  return null;
-                },
+              OutlinedButton.icon(
+                onPressed: _addGatewayField,
+                icon: const Icon(Icons.add),
+                label: const Text('Add Gateway'),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: Theme.of(context).colorScheme.primary),
+                ),
               ),
               const SizedBox(height: 24),
               BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+                // Rebuild the button only when the overall status changes
+                buildWhen: (prev, curr) => prev.status != curr.status,
                 builder: (context, state) {
                   if (state.status == DataStatus.loading) {
                     return const Center(child: CircularProgressIndicator());
                   }
                   return ElevatedButton.icon(
                     onPressed: _applyEcmpConfig,
-                    icon: const Icon(Icons.settings),
-                    label: const Text('Apply Settings'),
+                    icon: const Icon(Icons.settings_applications),
+                    label: const Text('Apply Changes'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      textStyle: const TextStyle(fontSize: 16)
+                    ),
                   );
                 },
               ),
@@ -2490,28 +2691,63 @@ class _EcmpFormState extends State<EcmpForm> {
       ),
     );
   }
+
+  /// Safely updates the list of controllers based on the BLoC state.
+  void _updateControllersFromState(List<String> newGateways) {
+    // First, dispose all existing controllers to prevent memory leaks.
+    for (final controller in _gatewayControllers) {
+      controller.dispose();
+    }
+    _gatewayControllers.clear();
+
+    // Create new controllers for each gateway found on the router.
+    for (final ip in newGateways) {
+      _gatewayControllers.add(TextEditingController(text: ip));
+    }
+
+    // Ensure there are at least two fields visible for the user.
+    while (_gatewayControllers.length < 2) {
+      _gatewayControllers.add(TextEditingController());
+    }
+
+    // Trigger a rebuild to show the new set of controllers.
+    setState(() {});
+  }
+  
+  /// A simple IP validator utility.
+  bool _isValidIp(String ip) {
+    final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
+    if (!ipRegex.hasMatch(ip)) return false;
+    final parts = ip.split('.');
+    for (final part in parts) {
+      final num = int.tryParse(part);
+      if (num == null || num < 0 || num > 255) return false;
+    }
+    return true;
+  }
 }
 
-// Improved _GatewayInputField to prevent pinging with an empty IP
+// The _GatewayInputField widget remains largely the same but is now used dynamically.
 class _GatewayInputField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
   final String hint;
   final String? Function(String?)? validator;
+
   const _GatewayInputField({
+    super.key,
     required this.controller,
     required this.label,
     required this.hint,
     this.validator,
   });
-  // IP validation regex
+
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
 
   bool _isValidIp(String ip) {
     if (ip.trim().isEmpty) return false;
     if (!_ipRegex.hasMatch(ip.trim())) return false;
-
-    final parts = ip.trim().split('.');
+    final parts = ip.split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
       if (num == null || num < 0 || num > 255) return false;
@@ -2521,103 +2757,92 @@ class _GatewayInputField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
-      builder: (context, state) {
-        final ipAddress = controller.text.trim();
-        final pingResult = state.pingResults[ipAddress];
-        final isPinging = state.pingingIp == ipAddress;
-        final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, child) {
+        return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+          builder: (context, state) {
+            final ipAddress = controller.text.trim();
+            final pingResult = state.pingResults[ipAddress];
+            final isPinging = state.pingingIp == ipAddress;
+            final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextFormField(
-              controller: controller,
-              validator: validator,
-              decoration: InputDecoration(
-                labelText: label,
-                hintText: hint,
-                border: const OutlineInputBorder(),
-                suffixIcon: isPinging
-                    ? const Padding(
-                        padding: EdgeInsets.all(12.0),
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.network_ping),
-                        tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
-                        onPressed: canPing
-                            ? () {
-                                context
-                                    .read<LoadBalancingBloc>()
-                                    .add(PingGatewayRequested(controller.text.trim()));
-                              }
-                            : null,
-                      ),
-              ),
-              onChanged: (value) {
-                // Trigger a rebuild to update the ping button's enabled state
-                if (context.mounted) {
-                  (context as Element).markNeedsBuild();
-                }
-              },
-            ),
-            if (pingResult != null) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: pingResult.toLowerCase().contains('success')
-                      ? Colors.green.withAlpha((.1 * 255).round())
-                      : Colors.orange.withAlpha((.1 * 255).round()),
-                  border: Border.all(
-                    color: pingResult.toLowerCase().contains('success')
-                        ? Colors.green
-                        : Colors.orange,
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  controller: controller,
+                  validator: validator,
+                  decoration: InputDecoration(
+                    labelText: label,
+                    hintText: hint,
+                    border: const OutlineInputBorder(),
+                    suffixIcon: isPinging
+                        ? const Padding(
+                            padding: EdgeInsets.all(12.0),
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : IconButton(
+                            icon: const Icon(Icons.network_ping),
+                            tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
+                            onPressed: canPing
+                                ? () {
+                                    context
+                                        .read<LoadBalancingBloc>()
+                                        .add(events.PingGatewayRequested(ipAddress));
+                                  }
+                                : null,
+                          ),
                   ),
-                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Row(
-                  children: [
-                    Icon(
-                      pingResult.toLowerCase().contains('success')
-                          ? Icons.check_circle
-                          : Icons.warning,
-                      size: 16,
+                if (pingResult != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
                       color: pingResult.toLowerCase().contains('success')
-                          ? Colors.green
-                          : Colors.orange,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        pingResult,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: pingResult.toLowerCase().contains('success')
-                              ? Colors.green.shade700
-                              : Colors.orange.shade700,
-                        ),
+                          ? Colors.green.withAlpha(30)
+                          : Colors.orange.withAlpha(30),
+                      border: Border.all(
+                        color: pingResult.toLowerCase().contains('success')
+                            ? Colors.green
+                            : Colors.orange,
                       ),
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 16),
-                      onPressed: () {
-                        context
-                            .read<LoadBalancingBloc>()
-                            .add(ClearPingResult(ipAddress));
-                      },
-                      tooltip: 'Clear Result',
+                    child: Row(
+                      children: [
+                        Icon(
+                          pingResult.toLowerCase().contains('success')
+                              ? Icons.check_circle
+                              : Icons.warning,
+                          size: 16,
+                          color: pingResult.toLowerCase().contains('success')
+                              ? Colors.green
+                              : Colors.orange,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(child: Text(pingResult)),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 16),
+                          onPressed: () {
+                            context
+                                .read<LoadBalancingBloc>()
+                                .add(events.ClearPingResult(ipAddress));
+                          },
+                          tooltip: 'Clear Result',
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
-            ],
-          ],
+                  ),
+                ],
+              ],
+            );
+          },
         );
       },
     );

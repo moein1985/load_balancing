@@ -28,7 +28,6 @@ class TelnetClientHandler {
     // Prepend 'terminal length 0' to avoid pagination
     final allCommands = ['terminal length 0', ...commands];
     Timer? timeoutTimer;
-
     // Setup timeout timer for the whole operation
     timeoutTimer = Timer(_commandTimeout, () {
       _logDebug('Telnet operation timed out');
@@ -37,7 +36,6 @@ class TelnetClientHandler {
         completer.completeError(const ServerFailure("Telnet operation timed out."));
       }
     });
-
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -155,7 +153,6 @@ class TelnetClientHandler {
         completer.complete('Timeout. Gateway is not reachable.');
       }
     });
-
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -179,7 +176,6 @@ class TelnetClientHandler {
         }
       },
     );
-
     try {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text;
@@ -304,21 +300,39 @@ class TelnetClientHandler {
     return await _executeTelnetPing(credentials, ipAddress);
   }
   
-  Future<String> applyEcmpConfig(DeviceCredentials credentials, List<String> gateways) async {
-    _logDebug('Applying ECMP config via Telnet for gateways: ${gateways.join(", ")}');
+  Future<String> applyEcmpConfig({
+    required DeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
+    _logDebug('Applying ECMP config via Telnet. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
     try {
       // Dynamically build the list of commands
       final List<String> commands = ['configure terminal'];
-      for (final gateway in gateways) {
+
+      // Generate commands to remove old gateways
+      for (final gateway in gatewaysToRemove) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+
+      // Generate commands to add new gateways
+      for (final gateway in gatewaysToAdd) {
         if (gateway.trim().isNotEmpty) {
           commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
         }
       }
       commands.add('end');
 
+      // Do nothing if there are no gateways to add or remove
+      if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
+        _logDebug('No changes to apply for ECMP config via Telnet.');
+        return 'No ECMP configuration changes were needed.';
+      }
+
       // _executeTelnetCommands already adds 'terminal length 0'
-      // so we pass the commands starting from the second element
-      final result = await _executeTelnetCommands(credentials, commands.sublist(1));
+      final result = await _executeTelnetCommands(credentials, commands);
       _logDebug('ECMP config commands sent via Telnet');
 
       if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {

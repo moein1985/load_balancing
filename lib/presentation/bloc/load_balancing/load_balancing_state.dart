@@ -8,16 +8,19 @@ enum DataStatus { initial, loading, success, failure }
 
 class LoadBalancingState extends Equatable {
   // Holds the credentials to be used for each request
-  final DeviceCredentials? credentials; 
+  final DeviceCredentials? credentials;
   final LoadBalancingType type;
   // General status for operations like applying configs
-  final DataStatus status; 
+  final DataStatus status;
   final String error;
   // Specific message for successful operations
-  final String? successMessage; 
+  final String? successMessage;
 
   final List<RouterInterface> interfaces;
   final DataStatus interfacesStatus;
+
+  // This new property holds the list of ECMP gateways read from the router.
+  final List<String> initialEcmpGateways;
 
   final String? routingTable;
   final DataStatus routingTableStatus;
@@ -34,6 +37,7 @@ class LoadBalancingState extends Equatable {
     this.successMessage,
     this.interfaces = const [],
     this.interfacesStatus = DataStatus.initial,
+    this.initialEcmpGateways = const [], // Initialize as empty list
     this.routingTable,
     this.routingTableStatus = DataStatus.initial,
     this.pingResults = const {},
@@ -50,12 +54,13 @@ class LoadBalancingState extends Equatable {
     bool clearSuccessMessage = false,
     List<RouterInterface>? interfaces,
     DataStatus? interfacesStatus,
+    List<String>? initialEcmpGateways, // Add to copyWith
     String? routingTable,
+    bool clearRoutingTable = false,
     DataStatus? routingTableStatus,
     Map<String, String>? pingResults,
     DataStatus? pingStatus,
     String? pingingIp,
-    bool clearRoutingTable = false,
   }) {
     return LoadBalancingState(
       credentials: credentials ?? this.credentials,
@@ -67,6 +72,7 @@ class LoadBalancingState extends Equatable {
       successMessage: clearSuccessMessage ? null : successMessage ?? this.successMessage,
       interfaces: interfaces ?? this.interfaces,
       interfacesStatus: interfacesStatus ?? this.interfacesStatus,
+      initialEcmpGateways: initialEcmpGateways ?? this.initialEcmpGateways, // Add to copyWith
       routingTable: clearRoutingTable ? null : routingTable ?? this.routingTable,
       routingTableStatus: routingTableStatus ?? this.routingTableStatus,
       pingResults: pingResults ?? this.pingResults,
@@ -78,6 +84,7 @@ class LoadBalancingState extends Equatable {
   @override
   List<Object?> get props => [
         credentials, type, status, error, successMessage, interfaces, interfacesStatus,
+        initialEcmpGateways, // Add to props for Equatable
         routingTable, routingTableStatus, pingResults, pingStatus, pingingIp
       ];
 }

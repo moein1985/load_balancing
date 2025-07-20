@@ -10,8 +10,13 @@ abstract class DeviceRepository {
     required DeviceCredentials credentials,
     required String ipAddress,
   });
+  
+  /// Applies the ECMP configuration to the device.
+  ///
+  /// Takes a list of gateways to add and a list of gateways to remove.
   Future<String> applyEcmpConfig({
     required DeviceCredentials credentials,
-    required List<String> gateways,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
   });
 }

@@ -69,10 +69,16 @@ class DeviceRepositoryImpl implements DeviceRepository {
   @override
   Future<String> applyEcmpConfig({
     required DeviceCredentials credentials,
-    required List<String> gateways,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
   }) async {
     try {
-      return await remoteDataSource.applyEcmpConfig(credentials, gateways);
+      // Pass the call with the new parameters to the data source
+      return await remoteDataSource.applyEcmpConfig(
+        credentials: credentials,
+        gatewaysToAdd: gatewaysToAdd,
+        gatewaysToRemove: gatewaysToRemove,
+      );
     } on ServerFailure catch (e) {
       return e.message;
     } catch (e) {
