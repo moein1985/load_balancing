@@ -1,5 +1,6 @@
 // lib/domain/repositories/device_repository.dart
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 abstract class DeviceRepository {
@@ -18,5 +19,10 @@ abstract class DeviceRepository {
     required DeviceCredentials credentials,
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
+  });
+
+    Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
   });
 }

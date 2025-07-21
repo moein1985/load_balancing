@@ -6,6 +6,8 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
 
 class SshClientHandler {
   static const _commandTimeout = Duration(seconds: 30);
@@ -279,6 +281,53 @@ class SshClientHandler {
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');
       return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+    } finally {
+      client?.close();
+    }
+  }
+
+    Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  }) async {
+    _logDebug('Applying PBR rule with SSH: ${rule.ruleName}');
+    SSHClient? client;
+    try {
+      client = await _createSshClient(credentials);
+      
+      // ساخت دستورات PBR
+      final List<String> commands = ['configure terminal'];
+      
+      // 1. ساخت Access List (با شماره 101 به عنوان مثال)
+      // TODO: در آینده میتوان شماره ACL را داینامیک کرد
+      final aclCommand = 'access-list 101 permit ${rule.protocol} ${rule.sourceAddress} ${rule.destinationAddress}${rule.destinationPort != 'any' ? ' eq ${rule.destinationPort}' : ''}';
+      commands.add(aclCommand);
+
+      // 2. ساخت Route Map
+      commands.add('route-map ${rule.ruleName} permit 10');
+      commands.add('match ip address 101');
+      if (rule.actionType == PbrActionType.nextHop) {
+        commands.add('set ip next-hop ${rule.nextHop}');
+      } else {
+        commands.add('set interface ${rule.egressInterface}');
+      }
+      commands.add('exit');
+
+      // 3. اعمال Route Map به اینترفیس
+      commands.add('interface ${rule.applyToInterface}');
+      commands.add('ip policy route-map ${rule.ruleName}');
+      commands.add('end');
+
+      final result = await _executeSshCommandsWithShell(client, commands);
+      _logDebug('PBR config commands executed');
+
+      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+        return 'Failed to apply PBR configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      }
+
+      return 'PBR rule "${rule.ruleName}" applied successfully.';
+    } catch (e) {
+      return 'An error occurred while applying PBR rule: ${e.toString()}';
     } finally {
       client?.close();
     }

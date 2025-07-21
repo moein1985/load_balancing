@@ -2,6 +2,7 @@
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/data/datasources/remote_datasource.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
 import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
@@ -78,6 +79,23 @@ class DeviceRepositoryImpl implements DeviceRepository {
         credentials: credentials,
         gatewaysToAdd: gatewaysToAdd,
         gatewaysToRemove: gatewaysToRemove,
+      );
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  @override
+  Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  }) async {
+    try {
+      return await remoteDataSource.applyPbrRule(
+        credentials: credentials,
+        rule: rule,
       );
     } on ServerFailure catch (e) {
       return e.message;

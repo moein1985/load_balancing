@@ -1,10 +1,8 @@
 
---- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\main.dart ---
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\injection_container.dart ---
 
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:load_balance/core/router/app_router.dart';
 import 'package:load_balance/data/datasources/remote_datasource_impl.dart';
 import 'package:load_balance/data/repositories/device_repository_impl.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
@@ -15,13 +13,12 @@ import 'package:load_balance/domain/usecases/get_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
 import 'package:load_balance/presentation/bloc/connection/connection_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
 
-void main() {
-  runApp(const MyApp());
-}
+class DependencyInjector extends StatelessWidget {
+  final Widget child;
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const DependencyInjector({super.key, required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -43,26 +40,51 @@ class MyApp extends StatelessWidget {
                 getInterfaces: GetInterfaces(repository),
                 getRoutingTable: GetRoutingTable(repository),
                 pingGateway: PingGateway(repository),
-                // Provide the new use case to the BLoC
                 applyEcmpConfig: ApplyEcmpConfig(repository),
               );
             },
           ),
-        ],
-        child: MaterialApp.router(
-          title: 'Cisco Load Balancer',
-          theme: ThemeData(
-            primarySwatch: Colors.blue,
-            useMaterial3: true,
-            brightness: Brightness.dark,
-            cardTheme: CardThemeData(elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0))),
-            inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12.0)))),
-            segmentedButtonTheme: SegmentedButtonThemeData(
-              style: ButtonStyle(shape: WidgetStateProperty.all(RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)))),
-            ),
+          BlocProvider(
+            create: (context) => PbrRuleFormBloc(),
           ),
-          routerConfig: AppRouter.router,
+        ],
+        child: child, // The MaterialApp will be passed here
+      ),
+    );
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\main.dart ---
+
+import 'package:flutter/material.dart';
+import 'package:load_balance/core/router/app_router.dart';
+import 'package:load_balance/injection_container.dart'; // Import the new file
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // Wrap the entire app with the DependencyInjector
+    return DependencyInjector(
+      child: MaterialApp.router(
+        title: 'Cisco Load Balancer',
+        theme: ThemeData(
+          primarySwatch: Colors.blue,
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          cardTheme: CardThemeData(elevation: 2, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0))),
+          // This line is corrected from your error log
+          inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(12.0)))),
+          segmentedButtonTheme: SegmentedButtonThemeData(
+            style: ButtonStyle(shape: WidgetStateProperty.all(RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)))),
+          ),
         ),
+        routerConfig: AppRouter.router,
       ),
     );
   }
@@ -106,10 +128,11 @@ class ServerFailure extends Failure {
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\core\router\app_router.dart ---
 
-// core/router/app_router.dart
+// lib/core/router/app_router.dart
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/presentation/screens/load_balancing/add_edit_pbr_rule_screen.dart';
 import 'package:load_balance/presentation/screens/load_balancing/load_balancing_screen.dart';
 import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
 
@@ -128,10 +151,30 @@ class AppRouter {
         path: '/config',
         name: 'config',
         builder: (BuildContext context, GoRouterState state) {
-          // Receive the credentials object from the previous screen
+          // این بخش بدون تغییر باقی میماند
           final credentials = state.extra as DeviceCredentials;
           return LoadBalancingScreen(credentials: credentials);
         },
+        routes: [
+          GoRoute(
+            path: 'add-pbr-rule',
+            name: 'add_pbr_rule',
+            builder: (BuildContext context, GoRouterState state) {
+              // **تغییر اصلی:** حالا extra را برای این صفحه هم میخوانیم
+              final credentials = state.extra as DeviceCredentials?;
+              return AddEditPbrRuleScreen(credentials: credentials);
+            },
+          ),
+          GoRoute(
+            path: 'edit-pbr-rule/:ruleId',
+            name: 'edit_pbr_rule',
+            builder: (BuildContext context, GoRouterState state) {
+              final ruleId = state.pathParameters['ruleId'];
+              final credentials = state.extra as DeviceCredentials?;
+              return AddEditPbrRuleScreen(credentials: credentials, ruleId: ruleId);
+            },
+          ),
+        ],
       ),
     ],
   );
@@ -144,6 +187,7 @@ class AppRouter {
 
 // lib/data/datasources/remote_datasource.dart
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 abstract class RemoteDataSource {
@@ -156,6 +200,10 @@ abstract class RemoteDataSource {
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
   });
+  Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  });
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\data\datasources\remote_datasource_impl.dart ---
@@ -165,6 +213,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
 import 'package:load_balance/data/datasources/ssh_client_handler.dart';
@@ -177,6 +226,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   final TelnetClientHandler _telnetHandler = TelnetClientHandler();
   final RestApiClientHandler _restApiHandler = RestApiClientHandler();
 
+  // A short delay to prevent overwhelming the router with rapid connections.
+  static const Duration _networkDelay = Duration(seconds: 2);
+
   void _logDebug(String message) {
     if (kDebugMode) {
       debugPrint('[REMOTE_DS] $message');
@@ -185,7 +237,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<List<RouterInterface>> fetchInterfaces(
-      DeviceCredentials credentials) async {
+    DeviceCredentials credentials,
+  ) async {
     _logDebug('Fetching interface list - ${credentials.type}');
     String briefResult;
     String detailedResult;
@@ -194,18 +247,28 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       briefResult = await _sshHandler.fetchInterfaces(credentials);
       detailedResult = await _sshHandler.fetchDetailedInterfaces(credentials);
     } else {
+      // ADDED: Delay before Telnet operations
+      await Future.delayed(_networkDelay);
       briefResult = await _telnetHandler.fetchInterfaces(credentials);
-      detailedResult = await _telnetHandler.fetchDetailedInterfaces(credentials);
+
+      await Future.delayed(_networkDelay);
+      detailedResult = await _telnetHandler.fetchDetailedInterfaces(
+        credentials,
+      );
     }
 
     return _parseDetailedInterfaces(briefResult, detailedResult);
   }
 
-  List<RouterInterface> _parseDetailedInterfaces(String briefResult, String detailedResult) {
+  List<RouterInterface> _parseDetailedInterfaces(
+    String briefResult,
+    String detailedResult,
+  ) {
     final interfaces = <RouterInterface>[];
     final briefLines = briefResult.split('\n');
     final briefRegex = RegExp(
-        r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)');
+      r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)',
+    );
     // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
@@ -232,19 +295,23 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       final status = interface['status']!;
 
       // Add the primary address
-      interfaces.add(RouterInterface(
-        name: interfaceName,
-        ipAddress: primaryIp,
-        status: status,
-      ));
+      interfaces.add(
+        RouterInterface(
+          name: interfaceName,
+          ipAddress: primaryIp,
+          status: status,
+        ),
+      );
       // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
-        interfaces.add(RouterInterface(
-          name: '$interfaceName (Secondary)',
-          ipAddress: secondaryIp,
-          status: status,
-        ));
+        interfaces.add(
+          RouterInterface(
+            name: '$interfaceName (Secondary)',
+            ipAddress: secondaryIp,
+            status: status,
+          ),
+        );
       }
     }
 
@@ -255,8 +322,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   Map<String, List<String>> _extractSecondaryIps(String configOutput) {
     final secondaryIps = <String, List<String>>{};
     final lines = configOutput.split('\n');
-    String?
-    currentInterface;
+    String? currentInterface;
 
     for (final line in lines) {
       final trimmedLine = line.trim();
@@ -267,7 +333,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       }
 
       // Find secondary IP addresses
-      if (currentInterface != null && trimmedLine.contains('ip address') && trimmedLine.contains('secondary')) {
+      if (currentInterface != null &&
+          trimmedLine.contains('ip address') &&
+          trimmedLine.contains('secondary')) {
         final parts = trimmedLine.split(' ');
         if (parts.length >= 4) {
           final ipAddress = parts[2];
@@ -289,6 +357,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     if (credentials.type == ConnectionType.ssh) {
       rawResult = await _sshHandler.getRoutingTable(credentials);
     } else {
+      // ADDED: Delay before Telnet operations
+      await Future.delayed(_networkDelay);
       rawResult = await _telnetHandler.getRoutingTable(credentials);
     }
 
@@ -296,7 +366,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   String _cleanRoutingTableOutput(String rawResult) {
-    _logDebug('Cleaning routing table output, input length: ${rawResult.length}');
+    _logDebug(
+      'Cleaning routing table output, input length: ${rawResult.length}',
+    );
     final lines = rawResult.split('\n');
     final cleanLines = <String>[];
     bool routeStarted = false;
@@ -309,7 +381,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       }
 
       // End of the routing table (prompt)
-      if (routeStarted && (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
+      if (routeStarted &&
+          (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
         break;
       }
 
@@ -325,7 +398,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<String> pingGateway(
-      DeviceCredentials credentials, String ipAddress) async {
+    DeviceCredentials credentials,
+    String ipAddress,
+  ) async {
     _logDebug('Starting ping for IP: $ipAddress - ${credentials.type}');
     if (ipAddress.trim().isEmpty) {
       return 'Error: IP address cannot be empty.';
@@ -341,6 +416,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       if (credentials.type == ConnectionType.ssh) {
         return await _sshHandler.pingGateway(credentials, cleanIp);
       } else {
+        // ADDED: Delay before Telnet operations
+        await Future.delayed(_networkDelay);
         return await _telnetHandler.pingGateway(credentials, cleanIp);
       }
     } catch (e) {
@@ -384,6 +461,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           gatewaysToRemove: gatewaysToRemove,
         );
       } else if (credentials.type == ConnectionType.telnet) {
+        // ADDED: Delay before Telnet operations
+        await Future.delayed(_networkDelay);
         return await _telnetHandler.applyEcmpConfig(
           credentials: credentials,
           gatewaysToAdd: gatewaysToAdd,
@@ -397,6 +476,34 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       return e.message;
     } catch (e) {
       _logDebug('Unknown error applying ECMP config: ${e.toString()}');
+      return 'An unknown error occurred: ${e.toString()}';
+    }
+  }
+
+  @override
+  Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  }) async {
+    _logDebug('Applying PBR rule: ${rule.ruleName}');
+    try {
+      if (credentials.type == ConnectionType.ssh) {
+        return await _sshHandler.applyPbrRule(
+          credentials: credentials,
+          rule: rule,
+        );
+      } else if (credentials.type == ConnectionType.telnet) {
+        await Future.delayed(_networkDelay);
+        return await _telnetHandler.applyPbrRule(
+          credentials: credentials,
+          rule: rule,
+        );
+      } else {
+        return 'PBR Configuration via REST API is not yet supported.';
+      }
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
       return 'An unknown error occurred: ${e.toString()}';
     }
   }
@@ -483,6 +590,8 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
 
 class SshClientHandler {
   static const _commandTimeout = Duration(seconds: 30);
@@ -756,6 +865,53 @@ class SshClientHandler {
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');
       return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+    } finally {
+      client?.close();
+    }
+  }
+
+    Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  }) async {
+    _logDebug('Applying PBR rule with SSH: ${rule.ruleName}');
+    SSHClient? client;
+    try {
+      client = await _createSshClient(credentials);
+      
+      // ساخت دستورات PBR
+      final List<String> commands = ['configure terminal'];
+      
+      // 1. ساخت Access List (با شماره 101 به عنوان مثال)
+      // TODO: در آینده میتوان شماره ACL را داینامیک کرد
+      final aclCommand = 'access-list 101 permit ${rule.protocol} ${rule.sourceAddress} ${rule.destinationAddress}${rule.destinationPort != 'any' ? ' eq ${rule.destinationPort}' : ''}';
+      commands.add(aclCommand);
+
+      // 2. ساخت Route Map
+      commands.add('route-map ${rule.ruleName} permit 10');
+      commands.add('match ip address 101');
+      if (rule.actionType == PbrActionType.nextHop) {
+        commands.add('set ip next-hop ${rule.nextHop}');
+      } else {
+        commands.add('set interface ${rule.egressInterface}');
+      }
+      commands.add('exit');
+
+      // 3. اعمال Route Map به اینترفیس
+      commands.add('interface ${rule.applyToInterface}');
+      commands.add('ip policy route-map ${rule.ruleName}');
+      commands.add('end');
+
+      final result = await _executeSshCommandsWithShell(client, commands);
+      _logDebug('PBR config commands executed');
+
+      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+        return 'Failed to apply PBR configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      }
+
+      return 'PBR rule "${rule.ruleName}" applied successfully.';
+    } catch (e) {
+      return 'An error occurred while applying PBR rule: ${e.toString()}';
     } finally {
       client?.close();
     }
@@ -1120,6 +1276,7 @@ class TelnetClientHandler {
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/data/datasources/remote_datasource.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/domain/repositories/device_repository.dart';
 import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
@@ -1196,6 +1353,23 @@ class DeviceRepositoryImpl implements DeviceRepository {
         credentials: credentials,
         gatewaysToAdd: gatewaysToAdd,
         gatewaysToRemove: gatewaysToRemove,
+      );
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  @override
+  Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  }) async {
+    try {
+      return await remoteDataSource.applyPbrRule(
+        credentials: credentials,
+        rule: rule,
       );
     } on ServerFailure catch (e) {
       return e.message;
@@ -1312,6 +1486,50 @@ class DeviceCredentials extends Equatable {
   }
 }
 
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\entities\pbr_rule.dart ---
+
+//lib/domain/entities/pbr_rule.dart
+
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
+
+class PbrRule extends Equatable {
+  final String ruleName;
+  final String sourceAddress;
+  final String destinationAddress;
+  final String protocol;
+  final String destinationPort;
+  final PbrActionType actionType;
+  final String nextHop;
+  final String egressInterface;
+  final String applyToInterface;
+
+  const PbrRule({
+    required this.ruleName,
+    required this.sourceAddress,
+    required this.destinationAddress,
+    required this.protocol,
+    required this.destinationPort,
+    required this.actionType,
+    required this.nextHop,
+    required this.egressInterface,
+    required this.applyToInterface,
+  });
+
+  @override
+  List<Object?> get props => [
+        ruleName,
+        sourceAddress,
+        destinationAddress,
+        protocol,
+        destinationPort,
+        actionType,
+        nextHop,
+        egressInterface,
+        applyToInterface,
+      ];
+}
+
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\entities\router_interface.dart ---
 
 // domain/entities/router_interface.dart
@@ -1336,6 +1554,7 @@ class RouterInterface extends Equatable {
 
 // lib/domain/repositories/device_repository.dart
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 abstract class DeviceRepository {
@@ -1354,6 +1573,11 @@ abstract class DeviceRepository {
     required DeviceCredentials credentials,
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
+  });
+
+    Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
   });
 }
 
@@ -1379,6 +1603,30 @@ class ApplyEcmpConfig {
       credentials: credentials,
       gatewaysToAdd: gatewaysToAdd,
       gatewaysToRemove: gatewaysToRemove,
+    );
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\domain\usecases\apply_pbr_rule.dart ---
+
+// lib/domain/usecases/apply_pbr_rule.dart
+
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+
+class ApplyPbrRule {
+  final DeviceRepository repository;
+
+  ApplyPbrRule(this.repository);
+
+  Future<String> call({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  }) async {
+    return await repository.applyPbrRule(
+      credentials: credentials,
+      rule: rule,
     );
   }
 }
@@ -1588,7 +1836,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
 
   // Manage concurrent ping operations
   final Map<String, Timer> _pingTimers = {};
-
   LoadBalancingBloc({
     required this.getInterfaces,
     required this.getRoutingTable,
@@ -1621,45 +1868,41 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
   }
 
   /// Helper method to parse gateway IPs from the 'show ip route' command output.
+  /// THIS METHOD HAS BEEN CORRECTED AND MADE MORE ROBUST.
   List<String> _parseEcmpGateways(String routingTable) {
     final gateways = <String>{}; // Use a Set to handle duplicates automatically.
     
-    // Regex for single-line ECMP entries: S* 0.0.0.0/0 [1/0] via 1.2.3.4
-    final singleLineRegex = RegExp(r'S\*\s+0\.0\.0\.0/0\s+\[\d+/\d+\]\s+via\s+([\d\.]+)');
-    
-    // Regex for multi-line ECMP entries (for the lines after the first one)
-    // Example:
-    // S* 0.0.0.0/0 [1/0] via 192.168.1.1
-    //              [1/0] via 192.168.2.1
-    final multiLineRegex = RegExp(r'^\s+\[\d+/\d+\]\s+via\s+([\d\.]+)');
-    
+    // A more robust regex that looks for the 'via' keyword after a default route pattern.
+    // This handles variations in spacing and formatting.
+    final ecmpRegex = RegExp(r'0\.0\.0\.0/0\s.*via\s+([\d\.]+)');
+    final subsequentLineRegex = RegExp(r'^\s*\[\d+/\d+\]\s+via\s+([\d\.]+)');
+
     final lines = routingTable.split('\n');
-    bool isEcmpBlock = false;
+    bool inEcmpBlock = false;
 
     for (final line in lines) {
-      final trimmedLine = line.trim();
-      
-      // Check for the start of a default static route
-      if (trimmedLine.startsWith('S* 0.0.0.0/0')) {
-        isEcmpBlock = true;
-        final match = singleLineRegex.firstMatch(trimmedLine);
+      if (line.contains('0.0.0.0/0')) {
+        final match = ecmpRegex.firstMatch(line);
         if (match != null) {
           gateways.add(match.group(1)!);
+          inEcmpBlock = true; // Once we find the first line, we enter the block
+          continue; // Move to the next line
         }
-      } 
-      // If we are inside an ECMP block, check for subsequent gateway lines
-      else if (isEcmpBlock) {
-        final match = multiLineRegex.firstMatch(line); // Use original line for indentation
+      }
+
+      // If we are in an ECMP block, check for subsequent indented lines
+      if (inEcmpBlock) {
+        final match = subsequentLineRegex.firstMatch(line);
         if (match != null) {
           gateways.add(match.group(1)!);
-        } else {
-          // If the line doesn't match the multi-line format, the ECMP block has ended.
-          isEcmpBlock = false;
+        } else if (line.trim().isNotEmpty && !line.trim().startsWith('[')) {
+          // If the line is not empty and doesn't start with '[', the ECMP block has ended.
+          inEcmpBlock = false;
         }
       }
     }
 
-    _logDebug('Parsed ECMP gateways: ${gateways.toList()}');
+    _logDebug('Parsed ECMP gateways (Corrected): ${gateways.toList()}');
     return gateways.toList();
   }
 
@@ -2037,6 +2280,265 @@ class LoadBalancingState extends Equatable {
       ];
 }
 
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\pbr_rule_form\pbr_rule_form_bloc.dart ---
+
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
+import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
+import 'pbr_rule_form_event.dart';
+import 'pbr_rule_form_state.dart';
+
+class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
+  final ApplyPbrRule applyPbrRule; 
+  final DeviceCredentials credentials; 
+  PbrRuleFormBloc({required this.applyPbrRule, required this.credentials}) : super(const PbrRuleFormState()) {
+    on<FormLoaded>(_onFormLoaded);
+    on<RuleNameChanged>((event, emit) => emit(state.copyWith(ruleName: event.value)));
+    on<SourceAddressChanged>((event, emit) => emit(state.copyWith(sourceAddress: event.value)));
+    on<DestinationAddressChanged>((event, emit) => emit(state.copyWith(destinationAddress: event.value)));
+    on<ProtocolChanged>((event, emit) => emit(state.copyWith(protocol: event.value)));
+    on<DestinationPortChanged>((event, emit) => emit(state.copyWith(destinationPort: event.value)));
+    on<ActionTypeChanged>((event, emit) => emit(state.copyWith(actionType: event.value)));
+    on<NextHopChanged>((event, emit) => emit(state.copyWith(nextHop: event.value)));
+    on<EgressInterfaceChanged>((event, emit) => emit(state.copyWith(egressInterface: event.value)));
+    on<ApplyToInterfaceChanged>((event, emit) => emit(state.copyWith(applyToInterface: event.value)));
+    on<FormSubmitted>(_onFormSubmitted);
+    
+  }
+
+  /// This handler is now much simpler. It just takes the pre-fetched list
+  /// of interfaces and populates the state. No network call is made.
+  void _onFormLoaded(FormLoaded event, Emitter<PbrRuleFormState> emit) {
+    // In edit mode, we would also load the existing rule data here.
+    // For now, we just populate the dropdowns.
+    emit(state.copyWith(
+      formStatus: DataStatus.success,
+      availableInterfaces: event.interfaces,
+      // Set initial values for the dropdowns with the first available interface.
+      egressInterface: event.interfaces.isNotEmpty ? event.interfaces.first.name : '',
+      applyToInterface: event.interfaces.isNotEmpty ? event.interfaces.first.name : '',
+    ));
+  }
+
+  Future<void> _onFormSubmitted(FormSubmitted event, Emitter<PbrRuleFormState> emit) async {
+    emit(state.copyWith(formStatus: DataStatus.loading));
+
+    // TODO: اعتبارسنجی کامل فیلدها
+    if (state.ruleName.isEmpty) {
+      emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: 'Rule Name cannot be empty.'));
+      return;
+    }
+
+    final newRule = PbrRule(
+      ruleName: state.ruleName,
+      sourceAddress: state.sourceAddress,
+      destinationAddress: state.destinationAddress,
+      protocol: state.protocol,
+      destinationPort: state.destinationPort,
+      actionType: state.actionType,
+      nextHop: state.nextHop,
+      egressInterface: state.egressInterface,
+      applyToInterface: state.applyToInterface,
+    );
+
+    try {
+      final result = await applyPbrRule(credentials: credentials, rule: newRule);
+      emit(state.copyWith(formStatus: DataStatus.success, successMessage: result));
+    } catch (e) {
+      emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: e.toString()));
+    }
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\pbr_rule_form\pbr_rule_form_event.dart ---
+
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
+
+abstract class PbrRuleFormEvent extends Equatable {
+  const PbrRuleFormEvent();
+  @override
+  List<Object?> get props => [];
+}
+
+/// This event is dispatched when the form opens to pass the initial data.
+class FormLoaded extends PbrRuleFormEvent {
+  final List<RouterInterface> interfaces; // Changed from DeviceCredentials
+  final String? ruleId; // For edit mode
+
+  const FormLoaded({required this.interfaces, this.ruleId});
+
+  @override
+  List<Object?> get props => [interfaces, ruleId];
+}
+
+/// Events for when each form field changes.
+class RuleNameChanged extends PbrRuleFormEvent {
+  final String value;
+  const RuleNameChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class SourceAddressChanged extends PbrRuleFormEvent {
+  final String value;
+  const SourceAddressChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class DestinationAddressChanged extends PbrRuleFormEvent {
+  final String value;
+  const DestinationAddressChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class ProtocolChanged extends PbrRuleFormEvent {
+  final String value;
+  const ProtocolChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class DestinationPortChanged extends PbrRuleFormEvent {
+  final String value;
+  const DestinationPortChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class ActionTypeChanged extends PbrRuleFormEvent {
+  final PbrActionType value;
+  const ActionTypeChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class NextHopChanged extends PbrRuleFormEvent {
+  final String value;
+  const NextHopChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class EgressInterfaceChanged extends PbrRuleFormEvent {
+  final String value;
+  const EgressInterfaceChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+class ApplyToInterfaceChanged extends PbrRuleFormEvent {
+  final String value;
+  const ApplyToInterfaceChanged(this.value);
+  @override
+  List<Object?> get props => [value];
+}
+
+/// Event for when the user presses the 'SAVE' button.
+class FormSubmitted extends PbrRuleFormEvent {}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\bloc\pbr_rule_form\pbr_rule_form_state.dart ---
+
+import 'package:equatable/equatable.dart';
+import 'package:load_balance/domain/entities/router_interface.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart'; // for DataStatus
+
+enum PbrActionType { nextHop, interface }
+
+class PbrRuleFormState extends Equatable {
+  // Overall form status
+  final DataStatus formStatus;
+
+  // List of interfaces to populate dropdowns
+  final List<RouterInterface> availableInterfaces;
+
+  // -- Form field values --
+  final String ruleName;
+  final String sourceAddress;
+  final String destinationAddress;
+  final String protocol;
+  final String destinationPort;
+  
+  final PbrActionType actionType;
+  final String nextHop;
+  final String egressInterface;
+
+  final String applyToInterface;
+  
+  final String? errorMessage;
+  final String? successMessage;
+
+  const PbrRuleFormState({
+    this.formStatus = DataStatus.initial,
+    this.availableInterfaces = const [],
+    this.ruleName = '',
+    this.sourceAddress = 'any',
+    this.destinationAddress = 'any',
+    this.protocol = 'any',
+    this.destinationPort = 'any',
+    this.actionType = PbrActionType.nextHop,
+    this.nextHop = '',
+    this.egressInterface = '',
+    this.applyToInterface = '',
+    this.errorMessage,
+    this.successMessage,
+  });
+
+  PbrRuleFormState copyWith({
+    DataStatus? formStatus,
+    List<RouterInterface>? availableInterfaces,
+    String? ruleName,
+    String? sourceAddress,
+    String? destinationAddress,
+    String? protocol,
+    String? destinationPort,
+    PbrActionType? actionType,
+    String? nextHop,
+    String? egressInterface,
+    String? applyToInterface,
+    String? errorMessage,
+    String? successMessage,
+  }) {
+    return PbrRuleFormState(
+      formStatus: formStatus ?? this.formStatus,
+      availableInterfaces: availableInterfaces ?? this.availableInterfaces,
+      ruleName: ruleName ?? this.ruleName,
+      sourceAddress: sourceAddress ?? this.sourceAddress,
+      destinationAddress: destinationAddress ?? this.destinationAddress,
+      protocol: protocol ?? this.protocol,
+      destinationPort: destinationPort ?? this.destinationPort,
+      actionType: actionType ?? this.actionType,
+      nextHop: nextHop ?? this.nextHop,
+      egressInterface: egressInterface ?? this.egressInterface,
+      applyToInterface: applyToInterface ?? this.applyToInterface,
+      errorMessage: errorMessage ?? this.errorMessage,
+      successMessage: successMessage ?? this.successMessage,
+    );
+  }
+
+  @override
+  List<Object?> get props => [
+        formStatus,
+        availableInterfaces,
+        ruleName,
+        sourceAddress,
+        destinationAddress,
+        protocol,
+        destinationPort,
+        actionType,
+        nextHop,
+        egressInterface,
+        applyToInterface,
+        errorMessage,
+        successMessage,
+      ];
+}
+
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\connection\connection_screen.dart ---
 
 // presentation/screens/connection/connection_screen.dart
@@ -2255,11 +2757,128 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
   }
 }
 
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\add_edit_pbr_rule_screen.dart ---
+
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_event.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart' show DataStatus;
+import 'widgets/pbr_rule_form_sections.dart';
+
+class AddEditPbrRuleScreen extends StatelessWidget {
+  final DeviceCredentials? credentials;
+  final String? ruleId;
+
+  const AddEditPbrRuleScreen({
+    super.key,
+    this.credentials,
+    this.ruleId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // 1. لیست اینترفیس‌ها را از بلاک اصلی (که از قبل داده‌ها را دارد) می‌خوانیم
+    final existingInterfaces = context.read<LoadBalancingBloc>().state.interfaces;
+
+    return BlocProvider(
+      create: (context) {
+        // 2. بلاک جدید فرم را با وابستگی‌ها و داده‌های اولیه ایجاد می‌کنیم
+        final repository = context.read<DeviceRepository>();
+        return PbrRuleFormBloc(
+          applyPbrRule: ApplyPbrRule(repository),
+          credentials: credentials!,
+        )..add(FormLoaded(
+            interfaces: existingInterfaces,
+            ruleId: ruleId,
+          ));
+      },
+      child: BlocListener<PbrRuleFormBloc, PbrRuleFormState>(
+        // 3. به نتیجه ثبت فرم گوش می‌دهیم تا عملیات مناسب را انجام دهیم
+        listenWhen: (prev, curr) => prev.formStatus != curr.formStatus,
+        listener: (context, state) {
+          if (state.formStatus == DataStatus.success && state.successMessage != null) {
+            // نمایش پیام موفقیت
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(
+                content: Text(state.successMessage!),
+                backgroundColor: Colors.green,
+              ));
+            // بازگشت به صفحه قبل
+            Navigator.of(context).pop();
+          } else if (state.formStatus == DataStatus.failure && state.errorMessage != null) {
+            // نمایش پیام خطا
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(
+                content: Text(state.errorMessage!),
+                backgroundColor: Colors.red,
+              ));
+          }
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(ruleId != null ? 'Edit: $ruleId' : 'Add New PBR Rule'),
+            actions: [
+              // 4. دکمه SAVE به state گوش می‌دهد و رویداد ثبت را ارسال می‌کند
+              BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+                buildWhen: (p, c) => p.formStatus != c.formStatus,
+                builder: (context, state) {
+                  // اگر در حال ارسال بود، یک لودینگ نمایش بده
+                  if (state.formStatus == DataStatus.loading) {
+                    return const Padding(
+                      padding: EdgeInsets.all(16.0),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      ),
+                    );
+                  }
+                  // در غیر این صورت دکمه را نمایش بده
+                  return TextButton(
+                    onPressed: () {
+                      context.read<PbrRuleFormBloc>().add(FormSubmitted());
+                    },
+                    child: const Text('SAVE'),
+                  );
+                },
+              ),
+            ],
+          ),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(16.0),
+            child: Form(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: const [
+                  TrafficMatchCard(),
+                  SizedBox(height: 16),
+                  RoutingActionCard(),
+                  SizedBox(height: 16),
+                  ApplyInterfaceCard(),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\load_balancing_screen.dart ---
 
 // lib/presentation/screens/load_balancing/load_balancing_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
@@ -2286,14 +2905,37 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Load Balancing Configuration'),
+      appBar: AppBar(title: const Text('Load Balancing Configuration')),
+      // دکمه شناور به اینجا منتقل شد
+      floatingActionButton: BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+        buildWhen: (prev, curr) => prev.type != curr.type,
+        builder: (context, state) {
+          // دکمه فقط زمانی نمایش داده میشود که تب PBR فعال باشد
+          if (state.type == LoadBalancingType.pbr) {
+            return FloatingActionButton.extended(
+              onPressed: () {
+                final credentials = context
+                    .read<LoadBalancingBloc>()
+                    .state
+                    .credentials;
+                if (credentials != null) {
+                  context.goNamed('add_pbr_rule', extra: credentials);
+                }
+              },
+              label: const Text('Add New Rule'),
+              icon: const Icon(Icons.add),
+            );
+          }
+          // در غیر این صورت، چیزی نمایش داده نمیشود
+          return const SizedBox.shrink();
+        },
       ),
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
         // Listen for general status changes (e.g., after applying config)
         listenWhen: (previous, current) => previous.status != current.status,
         listener: (context, state) {
-          if (state.status == DataStatus.success && state.successMessage != null) {
+          if (state.status == DataStatus.success &&
+              state.successMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -2302,7 +2944,8 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                   backgroundColor: Colors.green,
                 ),
               );
-          } else if (state.status == DataStatus.failure && state.error.isNotEmpty) {
+          } else if (state.status == DataStatus.failure &&
+              state.error.isNotEmpty) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -2341,9 +2984,9 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                     ],
                     selected: {state.type},
                     onSelectionChanged: (Set<LoadBalancingType> newSelection) {
-                      context
-                          .read<LoadBalancingBloc>()
-                          .add(LoadBalancingTypeSelected(newSelection.first));
+                      context.read<LoadBalancingBloc>().add(
+                        LoadBalancingTypeSelected(newSelection.first),
+                      );
                     },
                   );
                 },
@@ -2371,7 +3014,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
 // A private widget to display router info (Interfaces and Routing Table)
 class _RouterInfoSection extends StatelessWidget {
   const _RouterInfoSection();
-
   @override
   Widget build(BuildContext context) {
     final state = context.watch<LoadBalancingBloc>().state;
@@ -2390,8 +3032,7 @@ class _RouterInfoSection extends StatelessWidget {
     );
   }
 
-  Widget _buildInterfacesInfo(
-      BuildContext context, LoadBalancingState state) {
+  Widget _buildInterfacesInfo(BuildContext context, LoadBalancingState state) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16.0),
       child: Column(
@@ -2399,8 +3040,10 @@ class _RouterInfoSection extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Text('Device Interfaces',
-                style: Theme.of(context).textTheme.titleMedium),
+            child: Text(
+              'Device Interfaces',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
           ),
           const SizedBox(height: 8),
           if (state.interfacesStatus == DataStatus.loading)
@@ -2408,8 +3051,10 @@ class _RouterInfoSection extends StatelessWidget {
           else if (state.interfacesStatus == DataStatus.failure)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Text('Error fetching interfaces: ${state.error}',
-                  style: const TextStyle(color: Colors.red)),
+              child: Text(
+                'Error fetching interfaces: ${state.error}',
+                style: const TextStyle(color: Colors.red),
+              ),
             )
           else if (state.interfaces.isEmpty)
             const Padding(
@@ -2426,19 +3071,24 @@ class _RouterInfoSection extends StatelessWidget {
                   DataColumn(label: Text('Status')),
                 ],
                 rows: state.interfaces
-                    .map((iface) => DataRow(
-                          cells: [
-                            DataCell(Text(iface.name)),
-                            DataCell(Text(iface.ipAddress)),
-                            DataCell(Text(
+                    .map(
+                      (iface) => DataRow(
+                        cells: [
+                          DataCell(Text(iface.name)),
+                          DataCell(Text(iface.ipAddress)),
+                          DataCell(
+                            Text(
                               iface.status,
                               style: TextStyle(
-                                  color: iface.status == 'up'
-                                      ? Colors.green
-                                      : Colors.orange),
-                            )),
-                          ],
-                        ))
+                                color: iface.status == 'up'
+                                    ? Colors.green
+                                    : Colors.orange,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
                     .toList(),
               ),
             ),
@@ -2448,7 +3098,9 @@ class _RouterInfoSection extends StatelessWidget {
   }
 
   Widget _buildRoutingTableInfo(
-      BuildContext context, LoadBalancingState state) {
+    BuildContext context,
+    LoadBalancingState state,
+  ) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -2457,8 +3109,10 @@ class _RouterInfoSection extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('IP Routing Table',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'IP Routing Table',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               if (state.routingTableStatus != DataStatus.loading)
                 IconButton(
                   icon: const Icon(Icons.refresh),
@@ -2466,16 +3120,17 @@ class _RouterInfoSection extends StatelessWidget {
                   onPressed: state.credentials == null
                       ? null
                       : () {
-                          context
-                              .read<LoadBalancingBloc>()
-                              .add(FetchRoutingTableRequested());
+                          context.read<LoadBalancingBloc>().add(
+                            FetchRoutingTableRequested(),
+                          );
                         },
                 )
               else
                 const SizedBox(
-                    height: 24,
-                    width: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
             ],
           ),
           const SizedBox(height: 8),
@@ -2555,16 +3210,6 @@ class _EcmpFormState extends State<EcmpForm> {
           .where((ip) => ip.isNotEmpty) // Filter out empty fields
           .toList();
       
-      // The logic for requiring at least two gateways can be handled here or by the router itself.
-      // For flexibility (allowing removal of all routes), we can relax this check.
-      // if (gateways.length < 2) {
-      //   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      //     content: Text('At least two gateways are required for ECMP. To remove all, clear all fields.'),
-      //     backgroundColor: Colors.orange,
-      //   ));
-      //   return;
-      // }
-
       context.read<LoadBalancingBloc>().add(
             events.ApplyEcmpConfig(finalGateways: gateways),
           );
@@ -2589,7 +3234,7 @@ class _EcmpFormState extends State<EcmpForm> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Enter gateway IPs. The app will automatically detect existing gateways. Edit, add, or clear fields to update the configuration.',
+                'The app automatically detects existing gateways. Edit, add, or clear fields to update the configuration.',
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
@@ -2626,22 +3271,13 @@ class _EcmpFormState extends State<EcmpForm> {
                         children: [
                           Expanded(
                             child: _GatewayInputField(
-                              key: ValueKey('gateway_field_$index'), // More stable key
+                              key: ValueKey('gateway_field_$index'),
                               controller: _gatewayControllers[index],
                               label: 'Gateway ${index + 1}',
-                              hint: 'e.g., 192.168.${index + 1}.1',
-                              validator: (value) {
-                                final text = value?.trim() ?? '';
-                                // Validation is now optional unless it's one of the first two fields AND they are both empty.
-                                if (text.isNotEmpty && !_isValidIp(text)) {
-                                  return 'Invalid IP address format';
-                                }
-                                return null;
-                              },
                             ),
                           ),
-                          // Allow removing fields only if there are more than 2
-                          if (_gatewayControllers.length > 2)
+                          // Allow removing fields if there is more than one
+                          if (_gatewayControllers.length > 1)
                             Padding(
                               padding: const EdgeInsets.only(left: 8.0, top: 8.0),
                               child: IconButton(
@@ -2692,6 +3328,7 @@ class _EcmpFormState extends State<EcmpForm> {
     );
   }
 
+  /// **CORRECTED LOGIC**
   /// Safely updates the list of controllers based on the BLoC state.
   void _updateControllersFromState(List<String> newGateways) {
     // First, dispose all existing controllers to prevent memory leaks.
@@ -2705,41 +3342,29 @@ class _EcmpFormState extends State<EcmpForm> {
       _gatewayControllers.add(TextEditingController(text: ip));
     }
 
-    // Ensure there are at least two fields visible for the user.
-    while (_gatewayControllers.length < 2) {
+    // **MODIFIED:** If the list is empty after checking the router, 
+    // add one blank field to give the user a starting point.
+    if (_gatewayControllers.isEmpty) {
       _gatewayControllers.add(TextEditingController());
     }
 
     // Trigger a rebuild to show the new set of controllers.
-    setState(() {});
-  }
-  
-  /// A simple IP validator utility.
-  bool _isValidIp(String ip) {
-    final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
-    if (!ipRegex.hasMatch(ip)) return false;
-    final parts = ip.split('.');
-    for (final part in parts) {
-      final num = int.tryParse(part);
-      if (num == null || num < 0 || num > 255) return false;
+    if(mounted) {
+      setState(() {});
     }
-    return true;
   }
 }
 
-// The _GatewayInputField widget remains largely the same but is now used dynamically.
+/// **CORRECTED AND OPTIMIZED WIDGET**
+/// This widget is now structured to only rebuild the necessary parts on ping updates.
 class _GatewayInputField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
-  final String hint;
-  final String? Function(String?)? validator;
 
   const _GatewayInputField({
     super.key,
     required this.controller,
     required this.label,
-    required this.hint,
-    this.validator,
   });
 
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
@@ -2757,145 +3382,444 @@ class _GatewayInputField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<TextEditingValue>(
-      valueListenable: controller,
-      builder: (context, value, child) {
-        return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // The TextFormField is no longer inside a BlocBuilder that listens to pings.
+        TextFormField(
+          controller: controller,
+          validator: (value) {
+            final text = value?.trim() ?? '';
+            if (text.isNotEmpty && !_isValidIp(text)) {
+              return 'Invalid IP address format';
+            }
+            return null;
+          },
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: 'e.g., 192.168.1.1',
+            border: const OutlineInputBorder(),
+            // The suffix icon IS rebuilt based on ping status.
+            suffixIcon: BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+              buildWhen: (prev, curr) {
+                // Rebuild only if the ping status for THIS specific IP changes.
+                final ip = controller.text.trim();
+                return prev.pingingIp == ip || curr.pingingIp == ip || prev.pingResults[ip] != curr.pingResults[ip];
+              },
+              builder: (context, state) {
+                final ipAddress = controller.text.trim();
+                final isPinging = state.pingingIp == ipAddress;
+                final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
+
+                if (isPinging) {
+                  return const Padding(
+                    padding: EdgeInsets.all(12.0),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  );
+                }
+                return IconButton(
+                  icon: const Icon(Icons.network_ping),
+                  tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
+                  onPressed: canPing
+                      ? () {
+                          context
+                              .read<LoadBalancingBloc>()
+                              .add(events.PingGatewayRequested(ipAddress));
+                        }
+                      : null,
+                );
+              },
+            ),
+          ),
+        ),
+        // The ping result box IS also rebuilt based on ping status.
+        BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+           buildWhen: (prev, curr) {
+                final ip = controller.text.trim();
+                return prev.pingResults[ip] != curr.pingResults[ip];
+              },
           builder: (context, state) {
             final ipAddress = controller.text.trim();
             final pingResult = state.pingResults[ipAddress];
-            final isPinging = state.pingingIp == ipAddress;
-            final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextFormField(
-                  controller: controller,
-                  validator: validator,
-                  decoration: InputDecoration(
-                    labelText: label,
-                    hintText: hint,
-                    border: const OutlineInputBorder(),
-                    suffixIcon: isPinging
-                        ? const Padding(
-                            padding: EdgeInsets.all(12.0),
-                            child: SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          )
-                        : IconButton(
-                            icon: const Icon(Icons.network_ping),
-                            tooltip: canPing ? 'Ping Gateway' : 'Enter a valid IP to ping',
-                            onPressed: canPing
-                                ? () {
-                                    context
-                                        .read<LoadBalancingBloc>()
-                                        .add(events.PingGatewayRequested(ipAddress));
-                                  }
-                                : null,
-                          ),
+            if (pingResult == null) {
+              return const SizedBox.shrink(); // Return nothing if there is no result
+            }
+            return Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: pingResult.toLowerCase().contains('success')
+                      ? Colors.green.withAlpha(30)
+                      : Colors.orange.withAlpha(30),
+                  border: Border.all(
+                    color: pingResult.toLowerCase().contains('success')
+                        ? Colors.green
+                        : Colors.orange,
                   ),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                if (pingResult != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
+                child: Row(
+                  children: [
+                    Icon(
+                      pingResult.toLowerCase().contains('success')
+                          ? Icons.check_circle
+                          : Icons.warning,
+                      size: 16,
                       color: pingResult.toLowerCase().contains('success')
-                          ? Colors.green.withAlpha(30)
-                          : Colors.orange.withAlpha(30),
-                      border: Border.all(
-                        color: pingResult.toLowerCase().contains('success')
-                            ? Colors.green
-                            : Colors.orange,
-                      ),
-                      borderRadius: BorderRadius.circular(8),
+                          ? Colors.green
+                          : Colors.orange,
                     ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          pingResult.toLowerCase().contains('success')
-                              ? Icons.check_circle
-                              : Icons.warning,
-                          size: 16,
-                          color: pingResult.toLowerCase().contains('success')
-                              ? Colors.green
-                              : Colors.orange,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(pingResult)),
-                        IconButton(
-                          icon: const Icon(Icons.close, size: 16),
-                          onPressed: () {
-                            context
-                                .read<LoadBalancingBloc>()
-                                .add(events.ClearPingResult(ipAddress));
-                          },
-                          tooltip: 'Clear Result',
-                        ),
-                      ],
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(pingResult)),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () {
+                        context
+                            .read<LoadBalancingBloc>()
+                            .add(events.ClearPingResult(ipAddress));
+                      },
+                      tooltip: 'Clear Result',
                     ),
-                  ),
-                ],
-              ],
+                  ],
+                ),
+              ),
             );
           },
-        );
-      },
+        ),
+      ],
     );
   }
 }
 
 --- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\widgets\pbr_form.dart ---
 
-// presentation/screens/load_balancing/widgets/pbr_form.dart
+// lib/presentation/screens/load_balancing/widgets/pbr_form.dart
 import 'package:flutter/material.dart';
+// import 'package:go_router/go_router.dart'; // این import دیگر لازم نیست و حذف میشود
+import 'pbr_rule_list_item.dart';
 
-class PbrForm extends StatefulWidget {
+class PbrForm extends StatelessWidget {
   const PbrForm({super.key});
+
   @override
-  State<PbrForm> createState() => _PbrFormState();
+  Widget build(BuildContext context) {
+    // Scaffold حذف شد. ویجت اصلی اکنون Padding است
+    return Padding(
+      padding: const EdgeInsets.only(top: 16.0),
+      child: ListView(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        children: const [
+          // لیست رول های PBR مثل قبل نمایش داده میشود
+          PbrRuleListItem(
+            ruleName: 'Finance_Web_Traffic',
+            matchCondition: 'From: 192.168.10.0/24, Proto: TCP, Port: 443',
+            action: 'Next-Hop: 192.168.2.1',
+          ),
+          SizedBox(height: 16),
+          PbrRuleListItem(
+            ruleName: 'CCTV_Feed_To_Server',
+            matchCondition: 'From: 192.168.50.10, To: 10.0.0.5',
+            action: 'Next-Hop: 10.10.10.1',
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _PbrFormState extends State<PbrForm> {
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\widgets\pbr_rule_form_sections.dart ---
+
+// lib/presentation/screens/load_balancing/widgets/pbr_rule_form_sections.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_event.dart';
+import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
+
+// -- Section 1: Widget for identifying traffic --
+class TrafficMatchCard extends StatelessWidget {
+  const TrafficMatchCard({super.key});
+
   @override
   Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'PBR Configuration',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 8),
-            const Text(
-                'Define policies to route specific traffic through different gateways. (Coming Soon)'),
+            Text('Section 1: Identify Traffic', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 24),
-            // UI elements for PBR will be added here
-            const Center(
-              child: Text(
-                'PBR configuration UI is under development.',
-                style: TextStyle(fontStyle: FontStyle.italic),
-              ),
+            TextFormField(
+              decoration: const InputDecoration(labelText: 'Rule Name', hintText: 'e.g., Finance_Web_Traffic'),
+              onChanged: (value) => context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
             ),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: null, // Disabled for now
-              icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Apply Configuration'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
+            const SizedBox(height: 16),
+            TextFormField(
+              decoration: const InputDecoration(labelText: 'Source IP Address', hintText: 'e.g., 192.168.10.0/24 or "any"'),
+              initialValue: 'any',
+              onChanged: (value) => context.read<PbrRuleFormBloc>().add(SourceAddressChanged(value)),
+            ),
+            const SizedBox(height: 16),
+            // TODO: Add onChanged for other text fields like Destination Address and Port
+            TextFormField(
+              decoration: const InputDecoration(labelText: 'Destination IP Address', hintText: 'e.g., 8.8.8.8 or "any"'),
+              initialValue: 'any',
+            ),
+            const SizedBox(height: 16),
+            BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+              buildWhen: (p, c) => p.protocol != c.protocol,
+              builder: (context, state) {
+                return DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: 'Protocol'),
+                  value: state.protocol,
+                  items: ['any', 'tcp', 'udp', 'icmp']
+                      .map((label) => DropdownMenuItem(value: label, child: Text(label.toUpperCase())))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      context.read<PbrRuleFormBloc>().add(ProtocolChanged(value));
+                    }
+                  },
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              decoration: const InputDecoration(labelText: 'Destination Port (for TCP/UDP)', hintText: 'e.g., 443 or "any"'),
+              initialValue: 'any',
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+// -- Section 2: Widget for the routing action --
+class RoutingActionCard extends StatelessWidget {
+  const RoutingActionCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+          builder: (context, state) {
+            if (state.formStatus == DataStatus.loading) {
+              return const Center(child: CircularProgressIndicator());
+            }
+
+            final bloc = context.read<PbrRuleFormBloc>();
+            final interfaceItems = state.availableInterfaces
+                .map((iface) => DropdownMenuItem(value: iface.name, child: Text(iface.name)))
+                .toList();
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Section 2: Define Action', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                RadioListTile<PbrActionType>(
+                  title: const Text('Set Next-Hop Gateway'),
+                  value: PbrActionType.nextHop,
+                  groupValue: state.actionType,
+                  onChanged: (value) => bloc.add(ActionTypeChanged(value!)),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                  child: TextFormField(
+                    enabled: state.actionType == PbrActionType.nextHop,
+                    decoration: const InputDecoration(labelText: 'Gateway IP Address', hintText: 'e.g., 192.168.2.1'),
+                    onChanged: (value) => bloc.add(NextHopChanged(value)),
+                  ),
+                ),
+                RadioListTile<PbrActionType>(
+                  title: const Text('Set Egress Interface'),
+                  value: PbrActionType.interface,
+                  groupValue: state.actionType,
+                  onChanged: (value) => bloc.add(ActionTypeChanged(value!)),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                  child: DropdownButtonFormField<String>(
+                    value: state.egressInterface.isNotEmpty ? state.egressInterface : null,
+                    decoration: const InputDecoration(labelText: 'Interface'),
+                    items: interfaceItems,
+                    // **تغییر اصلی در اینجا است**
+                    // با null کردن onChanged، ویجت به طور خودکار غیرفعال میشود
+                    onChanged: state.actionType == PbrActionType.interface
+                        ? (value) {
+                            if (value != null) bloc.add(EgressInterfaceChanged(value));
+                          }
+                        : null,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// -- Section 3: Widget for applying to an interface --
+class ApplyInterfaceCard extends StatelessWidget {
+  const ApplyInterfaceCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+          builder: (context, state) {
+            if (state.formStatus == DataStatus.loading) {
+              return const SizedBox(height: 50); // Placeholder for loading
+            }
+
+            final bloc = context.read<PbrRuleFormBloc>();
+            final interfaceItems = state.availableInterfaces
+                .map((iface) => DropdownMenuItem(value: iface.name, child: Text(iface.name)))
+                .toList();
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Section 3: Apply Policy', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  value: state.applyToInterface.isNotEmpty ? state.applyToInterface : null,
+                  decoration: const InputDecoration(
+                    labelText: 'Apply to Inbound Traffic on Interface',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: interfaceItems,
+                  onChanged: (value) {
+                    if (value != null) bloc.add(ApplyToInterfaceChanged(value));
+                  },
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+--- FILE: C:\Users\Moein\Documents\Codes\Load_Balance\load_balance\lib\presentation\screens\load_balancing\widgets\pbr_rule_list_item.dart ---
+
+// lib/presentation/screens/load_balancing/widgets/pbr_rule_list_item.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
+
+class PbrRuleListItem extends StatelessWidget {
+  final String ruleName;
+  final String matchCondition;
+  final String action;
+
+  const PbrRuleListItem({
+    super.key,
+    required this.ruleName,
+    required this.matchCondition,
+    required this.action,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(ruleName, style: textTheme.titleMedium),
+            const SizedBox(height: 12),
+            _buildInfoRow(
+              context,
+              icon: Icons.filter_alt_outlined,
+              title: 'Match:',
+              value: matchCondition,
+            ),
+            const SizedBox(height: 8),
+            _buildInfoRow(
+              context,
+              icon: Icons.alt_route_outlined,
+              title: 'Action:',
+              value: action,
+            ),
+            const Divider(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined),
+                  tooltip: 'Edit Rule',
+                  onPressed: () {
+                    // credentials را از state بلاک میخوانیم
+                    final credentials = context
+                        .read<LoadBalancingBloc>()
+                        .state
+                        .credentials;
+                    if (credentials != null) {
+                      context.goNamed(
+                        'edit_pbr_rule',
+                        pathParameters: {'ruleId': ruleName},
+                        extra:
+                            credentials, // credentials را اینجا هم پاس میدهیم
+                      );
+                    }
+                  },
+                ),
+                IconButton(
+                  icon: Icon(Icons.delete_outline, color: Colors.red.shade300),
+                  tooltip: 'Delete Rule',
+                  onPressed: () {
+                    // TODO: Show delete confirmation dialog
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoRow(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String value,
+  }) {
+    final textTheme = Theme.of(context).textTheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(width: 4),
+        Expanded(child: Text(value, style: textTheme.bodyMedium)),
+      ],
     );
   }
 }

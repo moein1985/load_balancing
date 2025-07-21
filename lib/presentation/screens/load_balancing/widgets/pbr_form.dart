@@ -1,47 +1,33 @@
-// presentation/screens/load_balancing/widgets/pbr_form.dart
+// lib/presentation/screens/load_balancing/widgets/pbr_form.dart
 import 'package:flutter/material.dart';
+// import 'package:go_router/go_router.dart'; // این import دیگر لازم نیست و حذف میشود
+import 'pbr_rule_list_item.dart';
 
-class PbrForm extends StatefulWidget {
+class PbrForm extends StatelessWidget {
   const PbrForm({super.key});
-  @override
-  State<PbrForm> createState() => _PbrFormState();
-}
 
-class _PbrFormState extends State<PbrForm> {
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'PBR Configuration',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 8),
-            const Text(
-                'Define policies to route specific traffic through different gateways. (Coming Soon)'),
-            const SizedBox(height: 24),
-            // UI elements for PBR will be added here
-            const Center(
-              child: Text(
-                'PBR configuration UI is under development.',
-                style: TextStyle(fontStyle: FontStyle.italic),
-              ),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: null, // Disabled for now
-              icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Apply Configuration'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-            ),
-          ],
-        ),
+    // Scaffold حذف شد. ویجت اصلی اکنون Padding است
+    return Padding(
+      padding: const EdgeInsets.only(top: 16.0),
+      child: ListView(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        children: const [
+          // لیست رول های PBR مثل قبل نمایش داده میشود
+          PbrRuleListItem(
+            ruleName: 'Finance_Web_Traffic',
+            matchCondition: 'From: 192.168.10.0/24, Proto: TCP, Port: 443',
+            action: 'Next-Hop: 192.168.2.1',
+          ),
+          SizedBox(height: 16),
+          PbrRuleListItem(
+            ruleName: 'CCTV_Feed_To_Server',
+            matchCondition: 'From: 192.168.50.10, To: 10.0.0.5',
+            action: 'Next-Hop: 10.10.10.1',
+          ),
+        ],
       ),
     );
   }

@@ -1,6 +1,7 @@
 // lib/presentation/screens/load_balancing/load_balancing_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
@@ -27,14 +28,37 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Load Balancing Configuration'),
+      appBar: AppBar(title: const Text('Load Balancing Configuration')),
+      // دکمه شناور به اینجا منتقل شد
+      floatingActionButton: BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
+        buildWhen: (prev, curr) => prev.type != curr.type,
+        builder: (context, state) {
+          // دکمه فقط زمانی نمایش داده میشود که تب PBR فعال باشد
+          if (state.type == LoadBalancingType.pbr) {
+            return FloatingActionButton.extended(
+              onPressed: () {
+                final credentials = context
+                    .read<LoadBalancingBloc>()
+                    .state
+                    .credentials;
+                if (credentials != null) {
+                  context.goNamed('add_pbr_rule', extra: credentials);
+                }
+              },
+              label: const Text('Add New Rule'),
+              icon: const Icon(Icons.add),
+            );
+          }
+          // در غیر این صورت، چیزی نمایش داده نمیشود
+          return const SizedBox.shrink();
+        },
       ),
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
         // Listen for general status changes (e.g., after applying config)
         listenWhen: (previous, current) => previous.status != current.status,
         listener: (context, state) {
-          if (state.status == DataStatus.success && state.successMessage != null) {
+          if (state.status == DataStatus.success &&
+              state.successMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -43,7 +67,8 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                   backgroundColor: Colors.green,
                 ),
               );
-          } else if (state.status == DataStatus.failure && state.error.isNotEmpty) {
+          } else if (state.status == DataStatus.failure &&
+              state.error.isNotEmpty) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -82,9 +107,9 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                     ],
                     selected: {state.type},
                     onSelectionChanged: (Set<LoadBalancingType> newSelection) {
-                      context
-                          .read<LoadBalancingBloc>()
-                          .add(LoadBalancingTypeSelected(newSelection.first));
+                      context.read<LoadBalancingBloc>().add(
+                        LoadBalancingTypeSelected(newSelection.first),
+                      );
                     },
                   );
                 },
@@ -112,7 +137,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
 // A private widget to display router info (Interfaces and Routing Table)
 class _RouterInfoSection extends StatelessWidget {
   const _RouterInfoSection();
-
   @override
   Widget build(BuildContext context) {
     final state = context.watch<LoadBalancingBloc>().state;
@@ -131,8 +155,7 @@ class _RouterInfoSection extends StatelessWidget {
     );
   }
 
-  Widget _buildInterfacesInfo(
-      BuildContext context, LoadBalancingState state) {
+  Widget _buildInterfacesInfo(BuildContext context, LoadBalancingState state) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16.0),
       child: Column(
@@ -140,8 +163,10 @@ class _RouterInfoSection extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Text('Device Interfaces',
-                style: Theme.of(context).textTheme.titleMedium),
+            child: Text(
+              'Device Interfaces',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
           ),
           const SizedBox(height: 8),
           if (state.interfacesStatus == DataStatus.loading)
@@ -149,8 +174,10 @@ class _RouterInfoSection extends StatelessWidget {
           else if (state.interfacesStatus == DataStatus.failure)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Text('Error fetching interfaces: ${state.error}',
-                  style: const TextStyle(color: Colors.red)),
+              child: Text(
+                'Error fetching interfaces: ${state.error}',
+                style: const TextStyle(color: Colors.red),
+              ),
             )
           else if (state.interfaces.isEmpty)
             const Padding(
@@ -167,19 +194,24 @@ class _RouterInfoSection extends StatelessWidget {
                   DataColumn(label: Text('Status')),
                 ],
                 rows: state.interfaces
-                    .map((iface) => DataRow(
-                          cells: [
-                            DataCell(Text(iface.name)),
-                            DataCell(Text(iface.ipAddress)),
-                            DataCell(Text(
+                    .map(
+                      (iface) => DataRow(
+                        cells: [
+                          DataCell(Text(iface.name)),
+                          DataCell(Text(iface.ipAddress)),
+                          DataCell(
+                            Text(
                               iface.status,
                               style: TextStyle(
-                                  color: iface.status == 'up'
-                                      ? Colors.green
-                                      : Colors.orange),
-                            )),
-                          ],
-                        ))
+                                color: iface.status == 'up'
+                                    ? Colors.green
+                                    : Colors.orange,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
                     .toList(),
               ),
             ),
@@ -189,7 +221,9 @@ class _RouterInfoSection extends StatelessWidget {
   }
 
   Widget _buildRoutingTableInfo(
-      BuildContext context, LoadBalancingState state) {
+    BuildContext context,
+    LoadBalancingState state,
+  ) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -198,8 +232,10 @@ class _RouterInfoSection extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('IP Routing Table',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                'IP Routing Table',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               if (state.routingTableStatus != DataStatus.loading)
                 IconButton(
                   icon: const Icon(Icons.refresh),
@@ -207,16 +243,17 @@ class _RouterInfoSection extends StatelessWidget {
                   onPressed: state.credentials == null
                       ? null
                       : () {
-                          context
-                              .read<LoadBalancingBloc>()
-                              .add(FetchRoutingTableRequested());
+                          context.read<LoadBalancingBloc>().add(
+                            FetchRoutingTableRequested(),
+                          );
                         },
                 )
               else
                 const SizedBox(
-                    height: 24,
-                    width: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
             ],
           ),
           const SizedBox(height: 8),

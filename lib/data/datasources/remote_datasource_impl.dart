@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
 import 'package:load_balance/data/datasources/ssh_client_handler.dart';
@@ -26,7 +27,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<List<RouterInterface>> fetchInterfaces(
-      DeviceCredentials credentials) async {
+    DeviceCredentials credentials,
+  ) async {
     _logDebug('Fetching interface list - ${credentials.type}');
     String briefResult;
     String detailedResult;
@@ -38,19 +40,25 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       // ADDED: Delay before Telnet operations
       await Future.delayed(_networkDelay);
       briefResult = await _telnetHandler.fetchInterfaces(credentials);
-      
+
       await Future.delayed(_networkDelay);
-      detailedResult = await _telnetHandler.fetchDetailedInterfaces(credentials);
+      detailedResult = await _telnetHandler.fetchDetailedInterfaces(
+        credentials,
+      );
     }
 
     return _parseDetailedInterfaces(briefResult, detailedResult);
   }
 
-  List<RouterInterface> _parseDetailedInterfaces(String briefResult, String detailedResult) {
+  List<RouterInterface> _parseDetailedInterfaces(
+    String briefResult,
+    String detailedResult,
+  ) {
     final interfaces = <RouterInterface>[];
     final briefLines = briefResult.split('\n');
     final briefRegex = RegExp(
-        r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)');
+      r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)',
+    );
     // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
@@ -77,19 +85,23 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       final status = interface['status']!;
 
       // Add the primary address
-      interfaces.add(RouterInterface(
-        name: interfaceName,
-        ipAddress: primaryIp,
-        status: status,
-      ));
+      interfaces.add(
+        RouterInterface(
+          name: interfaceName,
+          ipAddress: primaryIp,
+          status: status,
+        ),
+      );
       // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
-        interfaces.add(RouterInterface(
-          name: '$interfaceName (Secondary)',
-          ipAddress: secondaryIp,
-          status: status,
-        ));
+        interfaces.add(
+          RouterInterface(
+            name: '$interfaceName (Secondary)',
+            ipAddress: secondaryIp,
+            status: status,
+          ),
+        );
       }
     }
 
@@ -100,8 +112,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   Map<String, List<String>> _extractSecondaryIps(String configOutput) {
     final secondaryIps = <String, List<String>>{};
     final lines = configOutput.split('\n');
-    String?
-    currentInterface;
+    String? currentInterface;
 
     for (final line in lines) {
       final trimmedLine = line.trim();
@@ -112,7 +123,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       }
 
       // Find secondary IP addresses
-      if (currentInterface != null && trimmedLine.contains('ip address') && trimmedLine.contains('secondary')) {
+      if (currentInterface != null &&
+          trimmedLine.contains('ip address') &&
+          trimmedLine.contains('secondary')) {
         final parts = trimmedLine.split(' ');
         if (parts.length >= 4) {
           final ipAddress = parts[2];
@@ -143,7 +156,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   String _cleanRoutingTableOutput(String rawResult) {
-    _logDebug('Cleaning routing table output, input length: ${rawResult.length}');
+    _logDebug(
+      'Cleaning routing table output, input length: ${rawResult.length}',
+    );
     final lines = rawResult.split('\n');
     final cleanLines = <String>[];
     bool routeStarted = false;
@@ -156,7 +171,8 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       }
 
       // End of the routing table (prompt)
-      if (routeStarted && (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
+      if (routeStarted &&
+          (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
         break;
       }
 
@@ -172,7 +188,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<String> pingGateway(
-      DeviceCredentials credentials, String ipAddress) async {
+    DeviceCredentials credentials,
+    String ipAddress,
+  ) async {
     _logDebug('Starting ping for IP: $ipAddress - ${credentials.type}');
     if (ipAddress.trim().isEmpty) {
       return 'Error: IP address cannot be empty.';
@@ -248,6 +266,34 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       return e.message;
     } catch (e) {
       _logDebug('Unknown error applying ECMP config: ${e.toString()}');
+      return 'An unknown error occurred: ${e.toString()}';
+    }
+  }
+
+  @override
+  Future<String> applyPbrRule({
+    required DeviceCredentials credentials,
+    required PbrRule rule,
+  }) async {
+    _logDebug('Applying PBR rule: ${rule.ruleName}');
+    try {
+      if (credentials.type == ConnectionType.ssh) {
+        return await _sshHandler.applyPbrRule(
+          credentials: credentials,
+          rule: rule,
+        );
+      } else if (credentials.type == ConnectionType.telnet) {
+        await Future.delayed(_networkDelay);
+        return await _telnetHandler.applyPbrRule(
+          credentials: credentials,
+          rule: rule,
+        );
+      } else {
+        return 'PBR Configuration via REST API is not yet supported.';
+      }
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
       return 'An unknown error occurred: ${e.toString()}';
     }
   }
