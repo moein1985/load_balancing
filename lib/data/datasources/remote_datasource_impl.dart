@@ -8,14 +8,11 @@ import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
 import 'package:load_balance/data/datasources/ssh_client_handler.dart';
 import 'package:load_balance/data/datasources/telnet_client_handler.dart';
-import 'package:load_balance/data/datasources/restapi_client_handler.dart';
 import 'remote_datasource.dart';
 
 class RemoteDataSourceImpl implements RemoteDataSource {
   final SshClientHandler _sshHandler = SshClientHandler();
   final TelnetClientHandler _telnetHandler = TelnetClientHandler();
-  final RestApiClientHandler _restApiHandler = RestApiClientHandler();
-
   // A short delay to prevent overwhelming the router with rapid connections.
   static const Duration _networkDelay = Duration(seconds: 2);
 
@@ -60,6 +57,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final briefRegex = RegExp(
       r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)',
     );
+
     // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
@@ -79,6 +77,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
     // Then, find secondary addresses from the detailed config
     final secondaryIps = _extractSecondaryIps(detailedResult);
+
     // Build the final interface list
     for (final interface in mainInterfaces) {
       final interfaceName = interface['name']!;
@@ -93,6 +92,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           status: status,
         ),
       );
+
       // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
@@ -163,6 +163,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final lines = rawResult.split('\n');
     final cleanLines = <String>[];
     bool routeStarted = false;
+
     for (final line in lines) {
       final trimmedLine = line.trim();
       // Start of the routing table
@@ -223,18 +224,13 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   bool _isValidIpAddress(String ip) {
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip)) return false;
+
     final parts = ip.split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
       if (num == null || num < 0 || num > 255) return false;
     }
     return true;
-  }
-
-  @override
-  Future<void> checkRestApiCredentials(DeviceCredentials credentials) async {
-    _logDebug('Checking REST API credentials');
-    return await _restApiHandler.checkCredentials(credentials);
   }
 
   @override
@@ -251,7 +247,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           gatewaysToAdd: gatewaysToAdd,
           gatewaysToRemove: gatewaysToRemove,
         );
-      } else if (credentials.type == ConnectionType.telnet) {
+      } else {
         // ADDED: Delay before Telnet operations
         await Future.delayed(_networkDelay);
         return await _telnetHandler.applyEcmpConfig(
@@ -259,8 +255,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           gatewaysToAdd: gatewaysToAdd,
           gatewaysToRemove: gatewaysToRemove,
         );
-      } else {
-        return 'Configuration via REST API is not yet supported.';
       }
     } on ServerFailure catch (e) {
       _logDebug('ServerFailure applying ECMP config: ${e.message}');
@@ -283,14 +277,12 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           credentials: credentials,
           rule: rule,
         );
-      } else if (credentials.type == ConnectionType.telnet) {
+      } else {
         await Future.delayed(_networkDelay);
         return await _telnetHandler.applyPbrRule(
           credentials: credentials,
           rule: rule,
         );
-      } else {
-        return 'PBR Configuration via REST API is not yet supported.';
       }
     } on ServerFailure catch (e) {
       return e.message;

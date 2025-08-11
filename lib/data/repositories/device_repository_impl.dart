@@ -24,8 +24,6 @@ class DeviceRepositoryImpl implements DeviceRepository {
       } catch (e) {
         throw ServerFailure(e.toString());
       }
-    } else if (credentials.type == ConnectionType.restApi) {
-      return await remoteDataSource.checkRestApiCredentials(credentials);
     }
   }
 

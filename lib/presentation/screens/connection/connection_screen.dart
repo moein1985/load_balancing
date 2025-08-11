@@ -6,7 +6,7 @@ import 'package:load_balance/presentation/bloc/connection/connection_bloc.dart';
 import 'package:load_balance/presentation/bloc/connection/connection_event.dart';
 import 'package:load_balance/presentation/bloc/connection/connection_state.dart';
 
-enum ConnectionType { ssh, telnet, restApi }
+enum ConnectionType { ssh, telnet }
 
 class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({super.key});
@@ -145,22 +145,19 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  Visibility(
-                    visible: _selectedType != ConnectionType.restApi,
-                    child: TextFormField(
-                      controller: _enablePasswordController,
-                      obscureText: !_isEnablePasswordVisible,
-                      decoration: InputDecoration(
-                        labelText: 'Enable Password (optional)',
-                        prefixIcon: const Icon(Icons.lock),
-                        suffixIcon: IconButton(
-                          icon: Icon(_isEnablePasswordVisible
-                              ? Icons.visibility_off
-                              : Icons.visibility),
-                          onPressed: () => setState(() =>
-                              _isEnablePasswordVisible =
-                                  !_isEnablePasswordVisible),
-                        ),
+                  TextFormField(
+                    controller: _enablePasswordController,
+                    obscureText: !_isEnablePasswordVisible,
+                    decoration: InputDecoration(
+                      labelText: 'Enable Password (optional)',
+                      prefixIcon: const Icon(Icons.lock),
+                      suffixIcon: IconButton(
+                        icon: Icon(_isEnablePasswordVisible
+                            ? Icons.visibility_off
+                            : Icons.visibility),
+                        onPressed: () => setState(() =>
+                            _isEnablePasswordVisible =
+                                !_isEnablePasswordVisible),
                       ),
                     ),
                   ),
@@ -175,10 +172,6 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                           value: ConnectionType.telnet,
                           label: Text('Telnet'),
                           icon: Icon(Icons.lan)),
-                      ButtonSegment<ConnectionType>(
-                          value: ConnectionType.restApi,
-                          label: Text('REST API'),
-                          icon: Icon(Icons.http)),
                     ],
                     selected: {_selectedType},
                     onSelectionChanged: (Set<ConnectionType> newSelection) {
