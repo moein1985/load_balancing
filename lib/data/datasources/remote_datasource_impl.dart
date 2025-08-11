@@ -24,6 +24,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       debugPrint('[REMOTE_DS] $message');
     }
   }
+  // ADDED: Method to fetch the device's hostname
 
   @override
   Future<List<RouterInterface>> fetchInterfaces(
