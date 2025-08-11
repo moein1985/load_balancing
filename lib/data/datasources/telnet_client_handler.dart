@@ -2,7 +2,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:ctelnet/ctelnet.dart';
 import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
@@ -18,7 +18,7 @@ class TelnetClientHandler {
   }
 
   Future<String> _executeTelnetCommands(
-      DeviceCredentials credentials, List<String> commands) async {
+      LBDeviceCredentials credentials, List<String> commands) async {
     _logDebug('Starting execution of Telnet commands');
     final completer = Completer<String>();
     final outputBuffer = StringBuffer();
@@ -137,7 +137,7 @@ class TelnetClientHandler {
   }
 
   Future<String> _executeTelnetPing(
-      DeviceCredentials credentials, String ipAddress) async {
+      LBDeviceCredentials credentials, String ipAddress) async {
     _logDebug('Starting Telnet ping for IP: $ipAddress');
     final completer = Completer<String>();
     CTelnetClient? client;
@@ -246,7 +246,7 @@ class TelnetClientHandler {
     return completer.future;
   }
 
-  Future<String> fetchDetailedInterfaces(DeviceCredentials credentials) async {
+  Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(credentials, ['show running-config']);
       _logDebug('Telnet detailed config fetched');
@@ -275,7 +275,7 @@ class TelnetClientHandler {
     return 'Ping failed. Check the IP or connection.';
   }
 
-  Future<String> fetchInterfaces(DeviceCredentials credentials) async {
+  Future<String> fetchInterfaces(LBDeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(
           credentials, ['show ip interface brief']);
@@ -287,7 +287,7 @@ class TelnetClientHandler {
     }
   }
 
-  Future<String> getRoutingTable(DeviceCredentials credentials) async {
+  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     try {
       final result = await _executeTelnetCommands(credentials, ['show ip route']);
       _logDebug('Telnet routing table fetched');
@@ -298,12 +298,12 @@ class TelnetClientHandler {
     }
   }
 
-  Future<String> pingGateway(DeviceCredentials credentials, String ipAddress) async {
+  Future<String> pingGateway(LBDeviceCredentials credentials, String ipAddress) async {
     return await _executeTelnetPing(credentials, ipAddress);
   }
   
   Future<String> applyEcmpConfig({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
   }) async {
@@ -350,7 +350,7 @@ class TelnetClientHandler {
   }
 
     Future<String> applyPbrRule({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required PbrRule rule,
   }) async {
     _logDebug('Applying PBR rule with Telnet: ${rule.ruleName}');

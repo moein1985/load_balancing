@@ -5,7 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 
 class RestApiClientHandler {
   void _logDebug(String message) {
@@ -14,7 +14,7 @@ class RestApiClientHandler {
     }
   }
 
-  Future<void> checkCredentials(DeviceCredentials credentials) async {
+  Future<void> checkCredentials(LBDeviceCredentials credentials) async {
     _logDebug('Checking REST API credentials');
     
     final dio = Dio();

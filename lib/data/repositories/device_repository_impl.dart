@@ -1,19 +1,19 @@
 // lib/data/repositories/device_repository_impl.dart
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/data/datasources/remote_datasource.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
-import 'package:load_balance/domain/repositories/device_repository.dart';
-import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+import 'package:load_balance/domain/repositories/router_repository.dart';
+import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
 
-class DeviceRepositoryImpl implements DeviceRepository {
+class DeviceRepositoryImpl implements RouterRepository {
   final RemoteDataSource remoteDataSource;
 
   DeviceRepositoryImpl({required this.remoteDataSource});
 
   @override
-  Future<void> checkCredentials(DeviceCredentials credentials) async {
+  Future<void> checkCredentials(LBDeviceCredentials credentials) async {
     // For SSH and Telnet, verifying credentials by fetching interfaces is a reliable check.
     if (credentials.type == ConnectionType.ssh ||
         credentials.type == ConnectionType.telnet) {
@@ -29,7 +29,7 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<List<RouterInterface>> getInterfaces(
-    DeviceCredentials credentials,
+    LBDeviceCredentials credentials,
   ) async {
     try {
       return await remoteDataSource.fetchInterfaces(credentials);
@@ -41,7 +41,7 @@ class DeviceRepositoryImpl implements DeviceRepository {
   }
 
   @override
-  Future<String> getRoutingTable(DeviceCredentials credentials) async {
+  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     try {
       return await remoteDataSource.getRoutingTable(credentials);
     } on ServerFailure catch (e) {
@@ -53,7 +53,7 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<String> pingGateway({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required String ipAddress,
   }) async {
     try {
@@ -67,7 +67,7 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<String> applyEcmpConfig({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
   }) async {
@@ -87,7 +87,7 @@ class DeviceRepositoryImpl implements DeviceRepository {
 
   @override
   Future<String> applyPbrRule({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required PbrRule rule,
   }) async {
     try {

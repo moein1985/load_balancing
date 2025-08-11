@@ -2,10 +2,10 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
-import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
 import 'package:load_balance/data/datasources/ssh_client_handler.dart';
 import 'package:load_balance/data/datasources/telnet_client_handler.dart';
 import 'remote_datasource.dart';
@@ -25,7 +25,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<List<RouterInterface>> fetchInterfaces(
-    DeviceCredentials credentials,
+    LBDeviceCredentials credentials,
   ) async {
     _logDebug('Fetching interface list - ${credentials.type}');
     String briefResult;
@@ -141,7 +141,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   @override
-  Future<String> getRoutingTable(DeviceCredentials credentials) async {
+  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     _logDebug('Fetching routing table - ${credentials.type}');
 
     String rawResult;
@@ -190,7 +190,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<String> pingGateway(
-    DeviceCredentials credentials,
+    LBDeviceCredentials credentials,
     String ipAddress,
   ) async {
     _logDebug('Starting ping for IP: $ipAddress - ${credentials.type}');
@@ -235,7 +235,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<String> applyEcmpConfig({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
   }) async {
@@ -267,7 +267,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
   @override
   Future<String> applyPbrRule({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required PbrRule rule,
   }) async {
     _logDebug('Applying PBR rule: ${rule.ruleName}');

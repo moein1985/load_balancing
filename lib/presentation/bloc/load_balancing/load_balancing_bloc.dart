@@ -4,16 +4,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
-import 'package:load_balance/domain/usecases/get_interfaces.dart';
-import 'package:load_balance/domain/usecases/get_routing_table.dart';
+import 'package:load_balance/domain/usecases/get_router_interfaces.dart';
+import 'package:load_balance/domain/usecases/get_router_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
 // Import the event file with a prefix to resolve the name conflict
 import 'load_balancing_event.dart' as events;
 import 'load_balancing_state.dart';
 
 class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingState> {
-  final GetInterfaces getInterfaces;
-  final GetRoutingTable getRoutingTable;
+  final GetRouterInterfaces getInterfaces;
+  final GetRouterRoutingTable getRoutingTable;
   final PingGateway pingGateway;
   final ApplyEcmpConfig applyEcmpConfig; // This is the Use Case class
 

@@ -1,16 +1,16 @@
 // lib/domain/usecases/apply_pbr_rule.dart
 
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_rule.dart';
-import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/repositories/router_repository.dart';
 
 class ApplyPbrRule {
-  final DeviceRepository repository;
+  final RouterRepository repository;
 
   ApplyPbrRule(this.repository);
 
   Future<String> call({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required PbrRule rule,
   }) async {
     return await repository.applyPbrRule(

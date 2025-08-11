@@ -1,6 +1,6 @@
 // lib/presentation/bloc/load_balancing/load_balancing_event.dart
 import 'package:equatable/equatable.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 
 abstract class LoadBalancingEvent extends Equatable {
@@ -10,7 +10,7 @@ abstract class LoadBalancingEvent extends Equatable {
 }
 
 class ScreenStarted extends LoadBalancingEvent {
-  final DeviceCredentials credentials;
+  final LBDeviceCredentials credentials;
   const ScreenStarted(this.credentials);
   @override
   List<Object?> get props => [credentials];

@@ -1,5 +1,5 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
@@ -8,7 +8,7 @@ import 'pbr_rule_form_state.dart';
 
 class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
   final ApplyPbrRule applyPbrRule; 
-  final DeviceCredentials credentials; 
+  final LBDeviceCredentials credentials; 
   PbrRuleFormBloc({required this.applyPbrRule, required this.credentials}) : super(const PbrRuleFormState()) {
     on<FormLoaded>(_onFormLoaded);
     on<RuleNameChanged>((event, emit) => emit(state.copyWith(ruleName: event.value)));

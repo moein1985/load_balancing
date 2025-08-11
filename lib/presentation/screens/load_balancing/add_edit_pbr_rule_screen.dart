@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
-import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
+import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
@@ -11,7 +11,7 @@ import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_sta
 import 'widgets/pbr_rule_form_sections.dart';
 
 class AddEditPbrRuleScreen extends StatelessWidget {
-  final DeviceCredentials? credentials;
+  final LBDeviceCredentials? credentials;
   final String? ruleId;
 
   const AddEditPbrRuleScreen({
@@ -28,7 +28,7 @@ class AddEditPbrRuleScreen extends StatelessWidget {
     return BlocProvider(
       create: (context) {
         // 2. بلاک جدید فرم را با وابستگی‌ها و داده‌های اولیه ایجاد می‌کنیم
-        final repository = context.read<DeviceRepository>();
+        final repository = context.read<RouterRepository>();
         return PbrRuleFormBloc(
           applyPbrRule: ApplyPbrRule(repository),
           credentials: credentials!,

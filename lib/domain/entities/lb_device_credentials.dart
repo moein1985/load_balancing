@@ -1,8 +1,8 @@
 // lib/domain/entities/device_credentials.dart
 import 'package:equatable/equatable.dart';
-import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
 
-class DeviceCredentials extends Equatable {
+class LBDeviceCredentials extends Equatable {
   final String ip;
   final String username;
   final String password;
@@ -11,7 +11,7 @@ class DeviceCredentials extends Equatable {
   final Duration connectionTimeout;
   final Duration commandTimeout;
 
-  const DeviceCredentials({
+  const LBDeviceCredentials({
     required this.ip,
     required this.username,
     required this.password,
@@ -66,7 +66,7 @@ class DeviceCredentials extends Equatable {
     return null;
   }
 
-  DeviceCredentials copyWith({
+  LBDeviceCredentials copyWith({
     String? ip,
     String? username,
     String? password,
@@ -75,7 +75,7 @@ class DeviceCredentials extends Equatable {
     Duration? connectionTimeout,
     Duration? commandTimeout,
   }) {
-    return DeviceCredentials(
+    return LBDeviceCredentials(
       ip: ip ?? this.ip,
       username: username ?? this.username,
       password: password ?? this.password,

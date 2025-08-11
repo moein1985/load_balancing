@@ -1,6 +1,6 @@
 // lib/presentation/bloc/load_balancing/load_balancing_state.dart
 import 'package:equatable/equatable.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 enum LoadBalancingType { ecmp, pbr }
@@ -8,7 +8,7 @@ enum DataStatus { initial, loading, success, failure }
 
 class LoadBalancingState extends Equatable {
   // Holds the credentials to be used for each request
-  final DeviceCredentials? credentials;
+  final LBDeviceCredentials? credentials;
   final LoadBalancingType type;
   // General status for operations like applying configs
   final DataStatus status;
@@ -46,7 +46,7 @@ class LoadBalancingState extends Equatable {
   });
 
   LoadBalancingState copyWith({
-    DeviceCredentials? credentials,
+    LBDeviceCredentials? credentials,
     LoadBalancingType? type,
     DataStatus? status,
     String? error,

@@ -1,14 +1,14 @@
 
 // domain/usecases/check_credentials.dart
-import 'package:load_balance/domain/entities/device_credentials.dart';
-import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
+import 'package:load_balance/domain/repositories/router_repository.dart';
 
 class CheckCredentials {
-  final DeviceRepository repository;
+  final RouterRepository repository;
 
   CheckCredentials(this.repository);
 
-  Future<void> call(DeviceCredentials credentials) async {
+  Future<void> call(LBDeviceCredentials credentials) async {
     return await repository.checkCredentials(credentials);
   }
 }

@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
@@ -10,7 +10,7 @@ import 'package:load_balance/presentation/screens/load_balancing/widgets/ecmp_fo
 import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_form.dart';
 
 class LoadBalancingScreen extends StatefulWidget {
-  final DeviceCredentials credentials;
+  final LBDeviceCredentials credentials;
   const LoadBalancingScreen({super.key, required this.credentials});
 
   @override

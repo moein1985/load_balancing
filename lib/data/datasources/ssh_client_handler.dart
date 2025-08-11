@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
-import 'package:load_balance/domain/entities/device_credentials.dart';
+import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
 
@@ -20,7 +20,7 @@ class SshClientHandler {
     }
   }
 
-  Future<SSHClient> _createSshClient(DeviceCredentials credentials) async {
+  Future<SSHClient> _createSshClient(LBDeviceCredentials credentials) async {
     _logDebug('Creating SSH connection to ${credentials.ip}');
     try {
       final socket = await SSHSocket.connect(
@@ -138,7 +138,7 @@ class SshClientHandler {
     }
   }
 
-  Future<String> fetchInterfaces(DeviceCredentials credentials) async {
+  Future<String> fetchInterfaces(LBDeviceCredentials credentials) async {
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
@@ -156,7 +156,7 @@ class SshClientHandler {
     }
   }
 
-  Future<String> fetchDetailedInterfaces(DeviceCredentials credentials) async {
+  Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
     SSHClient?
     client;
     try {
@@ -172,7 +172,7 @@ class SshClientHandler {
     }
   }
 
-  Future<String> getRoutingTable(DeviceCredentials credentials) async {
+  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
@@ -200,7 +200,7 @@ class SshClientHandler {
   }
 
   Future<String> pingGateway(
-    DeviceCredentials credentials,
+    LBDeviceCredentials credentials,
     String ipAddress,
   ) async {
     _logDebug('Starting SSH ping for IP: $ipAddress');
@@ -237,7 +237,7 @@ class SshClientHandler {
   }
 
   Future<String> applyEcmpConfig({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
   }) async {
@@ -287,7 +287,7 @@ class SshClientHandler {
   }
 
     Future<String> applyPbrRule({
-    required DeviceCredentials credentials,
+    required LBDeviceCredentials credentials,
     required PbrRule rule,
   }) async {
     _logDebug('Applying PBR rule with SSH: ${rule.ruleName}');

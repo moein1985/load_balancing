@@ -2,20 +2,20 @@
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
-import 'package:load_balance/presentation/bloc/connection/connection_bloc.dart';
-import 'package:load_balance/presentation/bloc/connection/connection_event.dart';
-import 'package:load_balance/presentation/bloc/connection/connection_state.dart';
+import 'package:load_balance/presentation/bloc/router_connection/router_connection_bloc.dart';
+import 'package:load_balance/presentation/bloc/router_connection/router_connection_event.dart';
+import 'package:load_balance/presentation/bloc/router_connection/router_connection_state.dart';
 
 enum ConnectionType { ssh, telnet }
 
-class ConnectionScreen extends StatefulWidget {
-  const ConnectionScreen({super.key});
+class RouterConnectionScreen extends StatefulWidget {
+  const RouterConnectionScreen({super.key});
 
   @override
-  State<ConnectionScreen> createState() => _ConnectionScreenState();
+  State<RouterConnectionScreen> createState() => _RouterConnectionScreenState();
 }
 
-class _ConnectionScreenState extends State<ConnectionScreen> {
+class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _ipController = TextEditingController();
   final _usernameController = TextEditingController();
@@ -37,7 +37,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
 
   void _checkCredentials() {
     if (_formKey.currentState!.validate()) {
-      context.read<ConnectionBloc>().add(
+      context.read<RouterConnectionBloc>().add(
             CheckCredentialsRequested(
               ip: _ipController.text,
               username: _usernameController.text,
@@ -55,7 +55,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       appBar: AppBar(
         title: const Text('Router Connection'),
       ),
-      body: BlocListener<ConnectionBloc, ConnectionState>(
+      body: BlocListener<RouterConnectionBloc, RouterConnectionState>(
         listener: (context, state) {
           if (state is ConnectionSuccess) {
             ScaffoldMessenger.of(context)
@@ -181,7 +181,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     },
                   ),
                   const SizedBox(height: 32),
-                  BlocBuilder<ConnectionBloc, ConnectionState>(
+                  BlocBuilder<RouterConnectionBloc, RouterConnectionState>(
                     builder: (context, state) {
                       if (state is ConnectionLoading) {
                         return const Center(child: CircularProgressIndicator());

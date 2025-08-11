@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/data/datasources/remote_datasource_impl.dart';
 import 'package:load_balance/data/repositories/device_repository_impl.dart';
-import 'package:load_balance/domain/repositories/device_repository.dart';
+import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/check_credentials.dart';
-import 'package:load_balance/domain/usecases/get_interfaces.dart';
-import 'package:load_balance/domain/usecases/get_routing_table.dart';
+import 'package:load_balance/domain/usecases/get_router_interfaces.dart';
+import 'package:load_balance/domain/usecases/get_router_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
-import 'package:load_balance/presentation/bloc/connection/connection_bloc.dart';
+import 'package:load_balance/presentation/bloc/router_connection/router_connection_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 
 class DependencyInjector extends StatelessWidget {
@@ -18,23 +18,23 @@ class DependencyInjector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return RepositoryProvider<DeviceRepository>(
+    return RepositoryProvider<RouterRepository>(
       create: (context) => DeviceRepositoryImpl(
         remoteDataSource: RemoteDataSourceImpl(),
       ),
       child: MultiBlocProvider(
         providers: [
           BlocProvider(
-            create: (context) => ConnectionBloc(
-              checkCredentials: CheckCredentials(context.read<DeviceRepository>()),
+            create: (context) => RouterConnectionBloc(
+              checkCredentials: CheckCredentials(context.read<RouterRepository>()),
             ),
           ),
           BlocProvider(
             create: (context) {
-              final repository = context.read<DeviceRepository>();
+              final repository = context.read<RouterRepository>();
               return LoadBalancingBloc(
-                getInterfaces: GetInterfaces(repository),
-                getRoutingTable: GetRoutingTable(repository),
+                getInterfaces: GetRouterInterfaces(repository),
+                getRoutingTable: GetRouterRoutingTable(repository),
                 pingGateway: PingGateway(repository),
                 applyEcmpConfig: ApplyEcmpConfig(repository),
               );

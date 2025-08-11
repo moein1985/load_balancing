@@ -1,15 +1,15 @@
 // presentation/bloc/connection/connection_event.dart
 import 'package:equatable/equatable.dart';
-import 'package:load_balance/presentation/screens/connection/connection_screen.dart';
+import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
 
-abstract class ConnectionEvent extends Equatable {
-  const ConnectionEvent();
+abstract class RouterConnectionEvent extends Equatable {
+  const RouterConnectionEvent();
 
   @override
   List<Object?> get props => [];
 }
 
-class CheckCredentialsRequested extends ConnectionEvent {
+class CheckCredentialsRequested extends RouterConnectionEvent {
   final String ip;
   final String username;
   final String password;
