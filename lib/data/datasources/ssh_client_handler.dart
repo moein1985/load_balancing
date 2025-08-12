@@ -113,8 +113,7 @@ class SshClientHandler {
       }
     }
 
-    final subscription =
-        shell.stdout.cast<List<int>>().transform(utf8.decoder).listen(
+    shell.stdout.cast<List<int>>().transform(utf8.decoder).listen(
       (data) {
         _logDebug('RAW SSH: "$data"');
         currentOutput.write(data);
