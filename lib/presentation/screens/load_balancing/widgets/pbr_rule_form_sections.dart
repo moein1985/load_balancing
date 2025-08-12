@@ -2,9 +2,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
-import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
-import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_event.dart';
-import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
+
+import '../../../bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
+import '../../../bloc/pbr_rule_form/pbr_rule_form_event.dart';
+import '../../../bloc/pbr_rule_form/pbr_rule_form_state.dart';
+
 
 // -- Section 1: Widget for identifying traffic --
 class TrafficMatchCard extends StatelessWidget {
@@ -20,23 +22,58 @@ class TrafficMatchCard extends StatelessWidget {
           children: [
             Text('Section 1: Identify Traffic', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 24),
-            TextFormField(
-              decoration: const InputDecoration(labelText: 'Rule Name', hintText: 'e.g., Finance_Web_Traffic'),
-              onChanged: (value) => context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
+
+            // Rule Name Field
+            BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+              buildWhen: (p, c) => p.ruleNameError != c.ruleNameError,
+              builder: (context, state) {
+                return TextFormField(
+                  decoration: InputDecoration(
+                    labelText: 'Rule Name',
+                    hintText: 'e.g., Finance_Web_Traffic',
+                    errorText: state.ruleNameError,
+                  ),
+                  onChanged: (value) => context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
+                );
+              },
             ),
             const SizedBox(height: 16),
-            TextFormField(
-              decoration: const InputDecoration(labelText: 'Source IP Address', hintText: 'e.g., 192.168.10.0/24 or "any"'),
-              initialValue: 'any',
-              onChanged: (value) => context.read<PbrRuleFormBloc>().add(SourceAddressChanged(value)),
+
+            // Source Address Field
+            BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+              buildWhen: (p, c) => p.sourceAddressError != c.sourceAddressError,
+              builder: (context, state) {
+                return TextFormField(
+                  initialValue: state.sourceAddress,
+                  decoration: InputDecoration(
+                    labelText: 'Source IP Address',
+                    hintText: 'e.g., 192.168.10.0/24 or "any"',
+                    errorText: state.sourceAddressError,
+                  ),
+                  onChanged: (value) => context.read<PbrRuleFormBloc>().add(SourceAddressChanged(value)),
+                );
+              },
             ),
             const SizedBox(height: 16),
-            // TODO: Add onChanged for other text fields like Destination Address and Port
-            TextFormField(
-              decoration: const InputDecoration(labelText: 'Destination IP Address', hintText: 'e.g., 8.8.8.8 or "any"'),
-              initialValue: 'any',
+            
+            // Destination Address Field
+            BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+              buildWhen: (p, c) => p.destinationAddressError != c.destinationAddressError,
+              builder: (context, state) {
+                return TextFormField(
+                  initialValue: state.destinationAddress,
+                  decoration: InputDecoration(
+                    labelText: 'Destination IP Address',
+                    hintText: 'e.g., 8.8.8.8 or "any"',
+                    errorText: state.destinationAddressError,
+                  ),
+                  onChanged: (value) => context.read<PbrRuleFormBloc>().add(DestinationAddressChanged(value)),
+                );
+              },
             ),
             const SizedBox(height: 16),
+
+            // Protocol Dropdown
             BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
               buildWhen: (p, c) => p.protocol != c.protocol,
               builder: (context, state) {
@@ -55,9 +92,21 @@ class TrafficMatchCard extends StatelessWidget {
               },
             ),
             const SizedBox(height: 16),
-            TextFormField(
-              decoration: const InputDecoration(labelText: 'Destination Port (for TCP/UDP)', hintText: 'e.g., 443 or "any"'),
-              initialValue: 'any',
+
+            // Destination Port Field
+            BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+               buildWhen: (p, c) => p.destinationPortError != c.destinationPortError,
+               builder: (context, state) {
+                 return TextFormField(
+                   initialValue: state.destinationPort,
+                   decoration: InputDecoration(
+                    labelText: 'Destination Port (for TCP/UDP)',
+                    hintText: 'e.g., 443 or "any"',
+                    errorText: state.destinationPortError
+                  ),
+                   onChanged: (value) => context.read<PbrRuleFormBloc>().add(DestinationPortChanged(value)),
+                 );
+               },
             ),
           ],
         ),
@@ -77,10 +126,6 @@ class RoutingActionCard extends StatelessWidget {
         padding: const EdgeInsets.all(16.0),
         child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
           builder: (context, state) {
-            if (state.formStatus == DataStatus.loading) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
             final bloc = context.read<PbrRuleFormBloc>();
             final interfaceItems = state.availableInterfaces
                 .map((iface) => DropdownMenuItem(value: iface.name, child: Text(iface.name)))
@@ -97,34 +142,50 @@ class RoutingActionCard extends StatelessWidget {
                   groupValue: state.actionType,
                   onChanged: (value) => bloc.add(ActionTypeChanged(value!)),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: TextFormField(
-                    enabled: state.actionType == PbrActionType.nextHop,
-                    decoration: const InputDecoration(labelText: 'Gateway IP Address', hintText: 'e.g., 192.168.2.1'),
-                    onChanged: (value) => bloc.add(NextHopChanged(value)),
-                  ),
-                ),
                 RadioListTile<PbrActionType>(
                   title: const Text('Set Egress Interface'),
                   value: PbrActionType.interface,
                   groupValue: state.actionType,
                   onChanged: (value) => bloc.add(ActionTypeChanged(value!)),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: DropdownButtonFormField<String>(
-                    value: state.egressInterface.isNotEmpty ? state.egressInterface : null,
-                    decoration: const InputDecoration(labelText: 'Interface'),
-                    items: interfaceItems,
-                    // **تغییر اصلی در اینجا است**
-                    // با null کردن onChanged، ویجت به طور خودکار غیرفعال میشود
-                    onChanged: state.actionType == PbrActionType.interface
-                        ? (value) {
-                            if (value != null) bloc.add(EgressInterfaceChanged(value));
-                          }
-                        : null,
-                  ),
+                const SizedBox(height: 8),
+
+                // *** بهبود UX با انیمیشن ***
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  transitionBuilder: (child, animation) {
+                    return FadeTransition(opacity: animation, child: child);
+                  },
+                  child: state.actionType == PbrActionType.nextHop
+                      ? Padding( // Next-Hop Field
+                          key: const ValueKey('nextHop'),
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                          child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+                            buildWhen: (p, c) => p.nextHopError != c.nextHopError,
+                            builder: (context, state) {
+                              return TextFormField(
+                                decoration: InputDecoration(
+                                  labelText: 'Gateway IP Address',
+                                  hintText: 'e.g., 192.168.2.1',
+                                  errorText: state.nextHopError,
+                                ),
+                                onChanged: (value) => bloc.add(NextHopChanged(value)),
+                              );
+                            },
+                          ),
+                        )
+                      : Padding( // Egress Interface Field
+                          key: const ValueKey('egressInterface'),
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                          child: DropdownButtonFormField<String>(
+                            value: state.egressInterface.isNotEmpty ? state.egressInterface : null,
+                            decoration: const InputDecoration(labelText: 'Interface'),
+                            items: interfaceItems,
+                            onChanged: (value) {
+                              if (value != null) bloc.add(EgressInterfaceChanged(value));
+                            },
+                          ),
+                        ),
                 ),
               ],
             );
@@ -146,8 +207,8 @@ class ApplyInterfaceCard extends StatelessWidget {
         padding: const EdgeInsets.all(16.0),
         child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
           builder: (context, state) {
-            if (state.formStatus == DataStatus.loading) {
-              return const SizedBox(height: 50); // Placeholder for loading
+            if (state.formStatus == DataStatus.initial && state.availableInterfaces.isEmpty) {
+              return const Center(child: Text("Loading interfaces..."));
             }
 
             final bloc = context.read<PbrRuleFormBloc>();

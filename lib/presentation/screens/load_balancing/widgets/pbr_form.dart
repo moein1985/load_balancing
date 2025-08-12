@@ -1,33 +1,38 @@
 // lib/presentation/screens/load_balancing/widgets/pbr_form.dart
 import 'package:flutter/material.dart';
-// import 'package:go_router/go_router.dart'; // این import دیگر لازم نیست و حذف میشود
-import 'pbr_rule_list_item.dart';
+// import 'pbr_rule_list_item.dart'; // This import is no longer needed
 
 class PbrForm extends StatelessWidget {
   const PbrForm({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // Scaffold حذف شد. ویجت اصلی اکنون Padding است
-    return Padding(
-      padding: const EdgeInsets.only(top: 16.0),
-      child: ListView(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        children: const [
-          // لیست رول های PBR مثل قبل نمایش داده میشود
-          PbrRuleListItem(
-            ruleName: 'Finance_Web_Traffic',
-            matchCondition: 'From: 192.168.10.0/24, Proto: TCP, Port: 443',
-            action: 'Next-Hop: 192.168.2.1',
-          ),
-          SizedBox(height: 16),
-          PbrRuleListItem(
-            ruleName: 'CCTV_Feed_To_Server',
-            matchCondition: 'From: 192.168.50.10, To: 10.0.0.5',
-            action: 'Next-Hop: 10.10.10.1',
-          ),
-        ],
+    // A placeholder to show when no PBR rules are configured yet.
+    // In a future version, this would be a BlocBuilder listening to a list of rules.
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 48.0, horizontal: 16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.rule_folder_outlined,
+              size: 48,
+              color: Theme.of(context).textTheme.bodySmall?.color,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No PBR rules configured',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Use the "Add New Rule" button to create a policy.',
+              style: Theme.of(context).textTheme.bodyMedium,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }

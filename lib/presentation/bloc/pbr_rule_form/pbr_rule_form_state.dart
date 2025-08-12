@@ -1,4 +1,6 @@
+// lib/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart
 import 'package:equatable/equatable.dart';
+import 'package:load_balance/core/utils/validators.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart'; // for DataStatus
 
@@ -7,7 +9,6 @@ enum PbrActionType { nextHop, interface }
 class PbrRuleFormState extends Equatable {
   // Overall form status
   final DataStatus formStatus;
-
   // List of interfaces to populate dropdowns
   final List<RouterInterface> availableInterfaces;
 
@@ -17,19 +18,25 @@ class PbrRuleFormState extends Equatable {
   final String destinationAddress;
   final String protocol;
   final String destinationPort;
-  
   final PbrActionType actionType;
   final String nextHop;
   final String egressInterface;
-
   final String applyToInterface;
   
-  final String? errorMessage;
+  // -- Validation Error Messages --
+  final String? ruleNameError;
+  final String? sourceAddressError;
+  final String? destinationAddressError;
+  final String? destinationPortError;
+  final String? nextHopError;
+  
+  final String? errorMessage; // General error
   final String? successMessage;
 
   const PbrRuleFormState({
     this.formStatus = DataStatus.initial,
     this.availableInterfaces = const [],
+    // Fields
     this.ruleName = '',
     this.sourceAddress = 'any',
     this.destinationAddress = 'any',
@@ -39,9 +46,35 @@ class PbrRuleFormState extends Equatable {
     this.nextHop = '',
     this.egressInterface = '',
     this.applyToInterface = '',
+    // Errors
+    this.ruleNameError,
+    this.sourceAddressError,
+    this.destinationAddressError,
+    this.destinationPortError,
+    this.nextHopError,
     this.errorMessage,
     this.successMessage,
   });
+
+  /// A getter to determine if the form is valid and can be submitted.
+  bool get isFormValid {
+    // Check if all value fields are valid according to the validators.
+    final isRuleNameValid = FormValidators.notEmpty(ruleName, 'Rule Name') == null;
+    final isSourceValid = FormValidators.networkAddress(sourceAddress) == null;
+    final isDestinationValid = FormValidators.networkAddress(destinationAddress) == null;
+    final isPortValid = FormValidators.port(destinationPort) == null;
+    
+    // Check action-specific fields
+    bool isActionValid = true;
+    if (actionType == PbrActionType.nextHop) {
+      isActionValid = FormValidators.ip(nextHop) == null;
+    } else { // PbrActionType.interface
+      isActionValid = egressInterface.isNotEmpty;
+    }
+    
+    // The form is valid if all individual checks pass.
+    return isRuleNameValid && isSourceValid && isDestinationValid && isPortValid && isActionValid && applyToInterface.isNotEmpty;
+  }
 
   PbrRuleFormState copyWith({
     DataStatus? formStatus,
@@ -55,6 +88,11 @@ class PbrRuleFormState extends Equatable {
     String? nextHop,
     String? egressInterface,
     String? applyToInterface,
+    String? ruleNameError,
+    String? sourceAddressError,
+    String? destinationAddressError,
+    String? destinationPortError,
+    String? nextHopError,
     String? errorMessage,
     String? successMessage,
   }) {
@@ -70,8 +108,13 @@ class PbrRuleFormState extends Equatable {
       nextHop: nextHop ?? this.nextHop,
       egressInterface: egressInterface ?? this.egressInterface,
       applyToInterface: applyToInterface ?? this.applyToInterface,
-      errorMessage: errorMessage ?? this.errorMessage,
-      successMessage: successMessage ?? this.successMessage,
+      ruleNameError: ruleNameError,
+      sourceAddressError: sourceAddressError,
+      destinationAddressError: destinationAddressError,
+      destinationPortError: destinationPortError,
+      nextHopError: nextHopError,
+      errorMessage: errorMessage,
+      successMessage: successMessage,
     );
   }
 
@@ -88,6 +131,11 @@ class PbrRuleFormState extends Equatable {
         nextHop,
         egressInterface,
         applyToInterface,
+        ruleNameError,
+        sourceAddressError,
+        destinationAddressError,
+        destinationPortError,
+        nextHopError,
         errorMessage,
         successMessage,
       ];
