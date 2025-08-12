@@ -57,7 +57,6 @@ class SshClientHandler {
     }
   }
 
-  /// *** متد اصلی و کاملا بازنویسی شده با منطق پیشرفته ***
   Future<List<String>> _executeCommandsAndGetOutputs(
     LBDeviceCredentials credentials,
     SSHClient client,
@@ -65,7 +64,7 @@ class SshClientHandler {
   ) async {
     _logDebug('Executing multi-command shell for: ${commands.join(", ")}');
     final shell = await client.shell(
-      pty: SSHPtyConfig(width: 120, height: 200), // Height increased
+      pty: SSHPtyConfig(width: 120, height: 200),
     );
 
     final completer = Completer<List<String>>();
@@ -75,22 +74,18 @@ class SshClientHandler {
     var sessionState = 'connecting';
     final enablePassword = credentials.enablePassword;
 
-    // FIX 1: Regex-based prompt detection for more reliability
     bool isPrompt(String text) {
       return RegExp(r'[>#]\s*$').hasMatch(text);
     }
 
     void processAndAddOutput() {
-      // Clean the output from the command itself and the final prompt
       String outputStr = currentOutput.toString();
       if (commandIndex > 0) {
-        // Remove the command echo from the beginning of the output
         final sentCommand = commands[commandIndex - 1];
         if (outputStr.trim().startsWith(sentCommand)) {
           outputStr = outputStr.replaceFirst(sentCommand, '').trim();
         }
       }
-      // Remove the trailing prompt
       final promptIndex = outputStr.lastIndexOf(RegExp(r'\r\n.*[>#]\s*$'));
       if (promptIndex != -1) {
         outputStr = outputStr.substring(0, promptIndex).trim();
@@ -113,7 +108,8 @@ class SshClientHandler {
       }
     }
 
-    shell.stdout.cast<List<int>>().transform(utf8.decoder).listen(
+    final subscription =
+        shell.stdout.cast<List<int>>().transform(utf8.decoder).listen(
       (data) {
         _logDebug('RAW SSH: "$data"');
         currentOutput.write(data);
@@ -136,7 +132,6 @@ class SshClientHandler {
             }
             break;
           case 'enabling':
-            // FIX 2: More robust password prompt detection
             if (RegExp(r'password[:]?\s*$', caseSensitive: false)
                 .hasMatch(receivedText)) {
               _logDebug('Enable password prompt detected.');
@@ -177,7 +172,6 @@ class SshClientHandler {
       },
       onDone: () {
         if (!completer.isCompleted) {
-          // Process any remaining output before completing
           if (currentOutput.isNotEmpty) {
             processAndAddOutput();
           }
@@ -197,7 +191,6 @@ class SshClientHandler {
     try {
       client = await _createSshClient(credentials);
       
-      // FIX 3: Correct order of commands
       final commandsToRun = [
         'terminal length 0',
         'show ip interface brief',
@@ -210,9 +203,8 @@ class SshClientHandler {
         throw const ServerFailure('Failed to execute all commands for interface data.');
       }
 
-      // The results correspond to the commands sent
-      final briefResult = results[1]; // Result of 'show ip interface brief'
-      final detailedResult = results[2]; // Result of 'show running-config'
+      final briefResult = results[1];
+      final detailedResult = results[2];
 
       _logDebug('SSH bundle fetched successfully');
       return {'brief': briefResult, 'detailed': detailedResult};
@@ -309,6 +301,35 @@ class SshClientHandler {
     }
   }
 
+  /// **متد اصلاح شده نهایی در این فایل**
+  /// Helper function to build the correct ACL command string.
+  String _buildAclCommand(PbrRule rule) {
+    // Translates 'any' protocol to 'ip' for Cisco IOS.
+    final protocol = rule.protocol.toLowerCase() == 'any' ? 'ip' : rule.protocol;
+    
+    // Handles source address (host, any, or subnet).
+    String source = 'any';
+    if (rule.sourceAddress.toLowerCase() != 'any') {
+      // Uses the 'host' keyword for single IPs for cleaner syntax.
+      // A more advanced version could convert CIDR to wildcard masks.
+      source = 'host ${rule.sourceAddress}';
+    }
+
+    // Handles destination address.
+    String destination = 'any';
+    if (rule.destinationAddress.toLowerCase() != 'any') {
+      destination = 'host ${rule.destinationAddress}';
+    }
+
+    // Appends port information only if protocol is TCP/UDP and port is not 'any'.
+    String port = '';
+    if ((protocol == 'tcp' || protocol == 'udp') && rule.destinationPort.toLowerCase() != 'any') {
+      port = ' eq ${rule.destinationPort}';
+    }
+    
+    return 'access-list 101 permit $protocol $source $destination$port';
+  }
+
   Future<String> applyPbrRule({
     required LBDeviceCredentials credentials,
     required PbrRule rule,
@@ -317,9 +338,11 @@ class SshClientHandler {
     try {
       client = await _createSshClient(credentials);
       final List<String> commands = ['configure terminal'];
-       final aclCommand =
-          'access-list 101 permit ${rule.protocol} ${rule.sourceAddress} ${rule.destinationAddress}${rule.destinationPort != 'any' ? ' eq ${rule.destinationPort}' : ''}';
+      
+      // *** تغییر اصلی: استفاده از متد کمکی برای ساخت دستور صحیح ***
+      final aclCommand = _buildAclCommand(rule);
       commands.add(aclCommand);
+
       commands.add('route-map ${rule.ruleName} permit 10');
       commands.add('match ip address 101');
       if (rule.actionType == PbrActionType.nextHop) {

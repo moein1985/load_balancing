@@ -49,17 +49,16 @@ class PbrRuleListItem extends StatelessWidget {
                   icon: const Icon(Icons.edit_outlined),
                   tooltip: 'Edit Rule',
                   onPressed: () {
-                    // credentials را از state بلاک میخوانیم
                     final credentials = context
                         .read<LoadBalancingBloc>()
                         .state
                         .credentials;
                     if (credentials != null) {
-                      context.goNamed(
+                      context.pushNamed(
                         'edit_pbr_rule',
                         pathParameters: {'ruleId': ruleName},
                         extra:
-                            credentials, // credentials را اینجا هم پاس میدهیم
+                            credentials, 
                       );
                     }
                   },

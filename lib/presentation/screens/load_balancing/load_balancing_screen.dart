@@ -52,7 +52,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                     .state
                     .credentials;
                 if (credentials != null) {
-                  context.goNamed('add_pbr_rule', extra: credentials);
+                  context.pushNamed('add_pbr_rule', extra: credentials);
                 }
               },
               label: const Text('Add New Rule'),

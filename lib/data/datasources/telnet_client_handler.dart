@@ -8,7 +8,7 @@ import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
 
 class TelnetClientHandler {
-  static const _commandTimeout = Duration(seconds: 30); // Increased timeout
+  static const _commandTimeout = Duration(seconds: 30);
   static const _connectionTimeout = Duration(seconds: 20);
 
   void _logDebug(String message) {
@@ -27,10 +27,9 @@ class TelnetClientHandler {
 
     var state = 'login';
     int commandIndex = 0;
-    // Prepend 'terminal length 0' to avoid pagination
     final allCommands = ['terminal length 0', ...commands];
     Timer? timeoutTimer;
-    // Setup timeout timer for the whole operation
+    
     timeoutTimer = Timer(_commandTimeout, () {
       _logDebug('Telnet operation timed out');
       if (!completer.isCompleted) {
@@ -38,6 +37,7 @@ class TelnetClientHandler {
         completer.completeError(const ServerFailure("Telnet operation timed out."));
       }
     });
+    
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -70,7 +70,6 @@ class TelnetClientHandler {
         client?.send('$cmd\n');
         commandIndex++;
       } else {
-        // Short delay before disconnecting to ensure all output is received
         Timer(const Duration(seconds: 1), () {
           if (!completer.isCompleted) {
             client?.disconnect();
@@ -96,7 +95,7 @@ class TelnetClientHandler {
               client?.send('enable\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear(); // Clear buffer before starting commands
+              outputBuffer.clear();
               executeNextCommand();
             }
             break;
@@ -105,7 +104,7 @@ class TelnetClientHandler {
               client?.send('${credentials.enablePassword ?? ''}\n');
             } else if (receivedText.endsWith('#')) {
               state = 'executing';
-              outputBuffer.clear(); // Clear buffer before starting commands
+              outputBuffer.clear();
               executeNextCommand();
             }
             break;
@@ -114,7 +113,6 @@ class TelnetClientHandler {
               if (commandIndex < allCommands.length) {
                 executeNextCommand();
               } else {
-                // Short delay before disconnecting
                 Timer(const Duration(seconds: 1), () {
                   if (!completer.isCompleted) {
                     client?.disconnect();
@@ -147,7 +145,6 @@ class TelnetClientHandler {
     bool commandSent = false;
     Timer? timeoutTimer;
 
-    // Setup timeout timer
     timeoutTimer = Timer(_commandTimeout, () {
       _logDebug('Ping operation timed out');
       if (!completer.isCompleted) {
@@ -155,6 +152,7 @@ class TelnetClientHandler {
         completer.complete('Timeout. Gateway is not reachable.');
       }
     });
+    
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -184,7 +182,6 @@ class TelnetClientHandler {
         outputBuffer.write(receivedText);
         _logDebug("Ping Received: ${receivedText.replaceAll('\r\n', ' ')}");
 
-        // Check for ping results in every message
         if (receivedText.contains('!!!!!') ||
             receivedText.contains('Success rate is 100') ||
             receivedText.contains('Success rate is 80')) {
@@ -246,17 +243,16 @@ class TelnetClientHandler {
     return completer.future;
   }
 
-Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
-  try {
-    // **FIX:** The _executeTelnetCommands already handles 'terminal length 0'
-    final result = await _executeTelnetCommands(credentials, ['show running-config']);
-    _logDebug('Telnet detailed config fetched');
-    return result;
-  } catch (e) {
-    _logDebug('Error fetching Telnet detailed config: $e');
-    rethrow;
+  Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
+    try {
+      final result = await _executeTelnetCommands(credentials, ['show running-config']);
+      _logDebug('Telnet detailed config fetched');
+      return result;
+    } catch (e) {
+      _logDebug('Error fetching Telnet detailed config: $e');
+      rethrow;
+    }
   }
-}
 
   String _analyzePingResult(String output) {
     _logDebug('Analyzing ping result');
@@ -272,7 +268,6 @@ Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
     } else if (output.toLowerCase().contains('network unreachable')) {
       return 'Error: Network unreachable.';
     }
-
     return 'Ping failed. Check the IP or connection.';
   }
 
@@ -310,39 +305,28 @@ Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
   }) async {
     _logDebug('Applying ECMP config via Telnet. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
     try {
-      // Dynamically build the list of commands
       final List<String> commands = ['configure terminal'];
-
-      // Generate commands to remove old gateways
       for (final gateway in gatewaysToRemove) {
         if (gateway.trim().isNotEmpty) {
           commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
         }
       }
-
-      // Generate commands to add new gateways
       for (final gateway in gatewaysToAdd) {
         if (gateway.trim().isNotEmpty) {
           commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
         }
       }
       commands.add('end');
-
-      // Do nothing if there are no gateways to add or remove
       if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
         _logDebug('No changes to apply for ECMP config via Telnet.');
         return 'No ECMP configuration changes were needed.';
       }
-
-      // _executeTelnetCommands already adds 'terminal length 0'
       final result = await _executeTelnetCommands(credentials, commands);
       _logDebug('ECMP config commands sent via Telnet');
-
       if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
         _logDebug('Error applying ECMP config via Telnet: $result');
         return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
       }
-
       return 'ECMP configuration applied successfully.';
     } catch (e) {
       _logDebug('Error applying ECMP config via Telnet: $e');
@@ -350,21 +334,40 @@ Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
     }
   }
 
-    Future<String> applyPbrRule({
+  /// **متد اصلاح شده نهایی در این فایل**
+  String _buildAclCommand(PbrRule rule) {
+    final protocol = rule.protocol.toLowerCase() == 'any' ? 'ip' : rule.protocol;
+    
+    String source = 'any';
+    if (rule.sourceAddress.toLowerCase() != 'any') {
+      source = 'host ${rule.sourceAddress}';
+    }
+
+    String destination = 'any';
+    if (rule.destinationAddress.toLowerCase() != 'any') {
+      destination = 'host ${rule.destinationAddress}';
+    }
+
+    String port = '';
+    if ((protocol == 'tcp' || protocol == 'udp') && rule.destinationPort.toLowerCase() != 'any') {
+      port = ' eq ${rule.destinationPort}';
+    }
+    
+    return 'access-list 101 permit $protocol $source $destination$port';
+  }
+
+  Future<String> applyPbrRule({
     required LBDeviceCredentials credentials,
     required PbrRule rule,
   }) async {
     _logDebug('Applying PBR rule with Telnet: ${rule.ruleName}');
     try {
-      // ساخت دستورات PBR
       final List<String> commands = ['configure terminal'];
-
-      // 1. ساخت Access List (با شماره 101 به عنوان مثال)
-      final aclCommand =
-          'access-list 101 permit ${rule.protocol} ${rule.sourceAddress} any ${rule.destinationAddress} any${rule.destinationPort != 'any' ? ' eq ${rule.destinationPort}' : ''}';
+      
+      // *** تغییر اصلی: استفاده از متد کمکی برای ساخت دستور صحیح ***
+      final aclCommand = _buildAclCommand(rule);
       commands.add(aclCommand);
 
-      // 2. ساخت Route Map
       commands.add('route-map ${rule.ruleName} permit 10');
       commands.add('match ip address 101');
       if (rule.actionType == PbrActionType.nextHop) {
@@ -373,8 +376,6 @@ Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
         commands.add('set interface ${rule.egressInterface}');
       }
       commands.add('exit');
-
-      // 3. اعمال Route Map به اینترفیس
       commands.add('interface ${rule.applyToInterface}');
       commands.add('ip policy route-map ${rule.ruleName}');
       commands.add('end');
