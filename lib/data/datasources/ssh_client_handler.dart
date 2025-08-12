@@ -12,7 +12,6 @@ import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state
 class SshClientHandler {
   static const _commandTimeout = Duration(seconds: 30);
   static const _connectionTimeout = Duration(seconds: 10);
-  static const _delayBetweenCommands = Duration(milliseconds: 500);
 
   void _logDebug(String message) {
     if (kDebugMode) {
@@ -58,139 +57,184 @@ class SshClientHandler {
     }
   }
 
-  Future<String> _executeSshCommand(SSHClient client, String command) async {
-    try {
-      _logDebug('Executing SSH command: $command');
-      final result = await client.run(command).timeout(_commandTimeout);
-      final output = utf8.decode(result);
-      _logDebug('SSH command executed, output length: ${output.length}');
-      return output;
-    } catch (e) {
-      _logDebug('Error executing SSH command: $e');
-      rethrow;
-    }
-  }
-
-  Future<String> _executeSshCommandsWithShell(
+  /// *** متد اصلی و کاملا بازنویسی شده با منطق پیشرفته ***
+  Future<List<String>> _executeCommandsAndGetOutputs(
+    LBDeviceCredentials credentials,
     SSHClient client,
     List<String> commands,
   ) async {
-    _logDebug('Starting execution of SSH commands with Shell');
-    try {
-      final shell = await client.shell(
-        pty: SSHPtyConfig(width: 80, height: 24),
-      );
-      final completer = Completer<String>();
-      final output = StringBuffer();
-      bool isReady = false;
-      int commandIndex = 0;
+    _logDebug('Executing multi-command shell for: ${commands.join(", ")}');
+    final shell = await client.shell(
+      pty: SSHPtyConfig(width: 120, height: 200), // Height increased
+    );
 
-      void sendNextCommand() {
-        if (commandIndex < commands.length) {
-          final command = commands[commandIndex];
-          _logDebug('Sending SSH Shell command: $command');
-          shell.stdin.add(utf8.encode('$command\n'));
-          commandIndex++;
+    final completer = Completer<List<String>>();
+    final outputs = <String>[];
+    var currentOutput = StringBuffer();
+    int commandIndex = 0;
+    var sessionState = 'connecting';
+    final enablePassword = credentials.enablePassword;
+
+    // FIX 1: Regex-based prompt detection for more reliability
+    bool isPrompt(String text) {
+      return RegExp(r'[>#]\s*$').hasMatch(text);
+    }
+
+    void processAndAddOutput() {
+      // Clean the output from the command itself and the final prompt
+      String outputStr = currentOutput.toString();
+      if (commandIndex > 0) {
+        // Remove the command echo from the beginning of the output
+        final sentCommand = commands[commandIndex - 1];
+        if (outputStr.trim().startsWith(sentCommand)) {
+          outputStr = outputStr.replaceFirst(sentCommand, '').trim();
         }
       }
+      // Remove the trailing prompt
+      final promptIndex = outputStr.lastIndexOf(RegExp(r'\r\n.*[>#]\s*$'));
+      if (promptIndex != -1) {
+        outputStr = outputStr.substring(0, promptIndex).trim();
+      }
+      outputs.add(outputStr);
+      currentOutput.clear();
+    }
 
-      shell.stdout.cast<List<int>>().transform(utf8.decoder).listen((data) {
-        output.write(data);
-        _logDebug(
-          'SSH Shell Output: ${data.replaceAll('\r\n', '\\n').replaceAll('\n', '\\n')}',
-        );
-
-        // Wait for the prompt before sending the first command
-        if (!isReady && (data.contains('#') || data.contains('>'))) {
-          isReady = true;
-          sendNextCommand();
-        }
-        // After a command is sent, wait for the next prompt to send the next command
-        else if (isReady && (data.contains('#') || data.contains('>'))) {
-          if (commandIndex < commands.length) {
-            sendNextCommand();
-          } else {
-            // All commands sent, close the shell and complete
-            shell.close();
-            if (!completer.isCompleted) {
-              completer.complete(output.toString());
-            }
-          }
-        }
-      });
-      shell.stderr.cast<List<int>>().transform(utf8.decoder).listen((data) {
-        _logDebug('SSH Shell Error: $data');
-        output.write(data);
-      });
-      // General timeout for the whole operation
-      Timer(_commandTimeout, () {
+    void sendNextCommand() {
+      if (commandIndex < commands.length) {
+        final command = commands[commandIndex];
+        _logDebug('Sending Shell Command: $command');
+        shell.stdin.add(utf8.encode('$command\n'));
+        commandIndex++;
+      } else {
         if (!completer.isCompleted) {
           shell.close();
-          completer.completeError(
-            TimeoutException('SSH Shell operation timed out', _commandTimeout),
-          );
+          completer.complete(outputs);
         }
-      });
-      return await completer.future;
-    } catch (e) {
-      _logDebug('Error in SSH Shell: $e');
-      rethrow;
+      }
     }
+
+    final subscription =
+        shell.stdout.cast<List<int>>().transform(utf8.decoder).listen(
+      (data) {
+        _logDebug('RAW SSH: "$data"');
+        currentOutput.write(data);
+        final receivedText = currentOutput.toString().trim();
+
+        switch (sessionState) {
+          case 'connecting':
+            if (isPrompt(receivedText)) {
+              if (receivedText.endsWith('>')) {
+                _logDebug('User prompt detected. Sending enable.');
+                sessionState = 'enabling';
+                currentOutput.clear();
+                shell.stdin.add(utf8.encode('enable\n'));
+              } else if (receivedText.endsWith('#')) {
+                _logDebug('Privileged prompt detected. Starting commands.');
+                sessionState = 'executing';
+                currentOutput.clear();
+                sendNextCommand();
+              }
+            }
+            break;
+          case 'enabling':
+            // FIX 2: More robust password prompt detection
+            if (RegExp(r'password[:]?\s*$', caseSensitive: false)
+                .hasMatch(receivedText)) {
+              _logDebug('Enable password prompt detected.');
+              sessionState = 'sending_enable_password';
+              currentOutput.clear();
+              shell.stdin.add(utf8.encode('${enablePassword ?? ''}\n'));
+            } else if (isPrompt(receivedText) && receivedText.endsWith('#')) {
+              _logDebug('Enabled successfully (no password). Starting commands.');
+              sessionState = 'executing';
+              currentOutput.clear();
+              sendNextCommand();
+            }
+            break;
+          case 'sending_enable_password':
+            if (isPrompt(receivedText) && receivedText.endsWith('#')) {
+              _logDebug('Enabled with password. Starting commands.');
+              sessionState = 'executing';
+              currentOutput.clear();
+              sendNextCommand();
+            } else if (isPrompt(receivedText) && receivedText.endsWith('>')) {
+              if (!completer.isCompleted) {
+                completer.completeError(
+                    const ServerFailure('Enable failed. Check password.'));
+                shell.close();
+              }
+            }
+            break;
+          case 'executing':
+            if (isPrompt(receivedText)) {
+              processAndAddOutput();
+              sendNextCommand();
+            }
+            break;
+        }
+      },
+      onError: (e) {
+        if (!completer.isCompleted) completer.completeError(e);
+      },
+      onDone: () {
+        if (!completer.isCompleted) {
+          // Process any remaining output before completing
+          if (currentOutput.isNotEmpty) {
+            processAndAddOutput();
+          }
+          completer.complete(outputs);
+        }
+      },
+    );
+
+    return completer.future.timeout(_commandTimeout);
   }
 
-  Future<String> fetchInterfaces(LBDeviceCredentials credentials) async {
+  Future<Map<String, String>> fetchInterfaceDataBundle(
+    LBDeviceCredentials credentials,
+  ) async {
+    _logDebug('Fetching SSH interface data bundle in a single session');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final result = await _executeSshCommand(
-        client,
+      
+      // FIX 3: Correct order of commands
+      final commandsToRun = [
+        'terminal length 0',
         'show ip interface brief',
-      );
-      _logDebug('SSH interfaces fetched');
-      return result;
+        'show running-config',
+      ];
+      
+      final results = await _executeCommandsAndGetOutputs(credentials, client, commandsToRun);
+
+      if (results.length < 3) {
+        throw const ServerFailure('Failed to execute all commands for interface data.');
+      }
+
+      // The results correspond to the commands sent
+      final briefResult = results[1]; // Result of 'show ip interface brief'
+      final detailedResult = results[2]; // Result of 'show running-config'
+
+      _logDebug('SSH bundle fetched successfully');
+      return {'brief': briefResult, 'detailed': detailedResult};
     } catch (e) {
-      _logDebug('Error fetching SSH interfaces: $e');
+      _logDebug('Error fetching SSH data bundle: $e');
       rethrow;
     } finally {
       client?.close();
+      _logDebug('SSH bundle session closed');
     }
   }
-
-  Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
-    SSHClient?
-    client;
-    try {
-      client = await _createSshClient(credentials);
-      final result = await _executeSshCommand(client, 'show running-config');
-      _logDebug('SSH detailed config fetched');
-      return result;
-    } catch (e) {
-      _logDebug('Error fetching SSH detailed config: $e');
-      rethrow;
-    } finally {
-      client?.close();
-    }
-  }
-
+  
   Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      try {
-        final result = await _executeSshCommandsWithShell(client, [
-          'terminal length 0',
-          'show ip route',
-        ]);
-        _logDebug('SSH routing table fetched with Shell');
-        return result;
-      } catch (e) {
-        _logDebug('Error in SSH Shell, trying legacy method: $e');
-        await _executeSshCommand(client, 'terminal length 0');
-        await Future.delayed(_delayBetweenCommands);
-        final result = await _executeSshCommand(client, 'show ip route');
-        _logDebug('SSH routing table fetched with legacy method');
-        return result;
-      }
+      final results = await _executeCommandsAndGetOutputs(credentials, client, [
+        'terminal length 0',
+        'show ip route',
+      ]);
+      return results.last;
     } catch (e) {
       _logDebug('Error fetching SSH routing table: $e');
       rethrow;
@@ -203,15 +247,15 @@ class SshClientHandler {
     LBDeviceCredentials credentials,
     String ipAddress,
   ) async {
-    _logDebug('Starting SSH ping for IP: $ipAddress');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      final result = await _executeSshCommand(
+      final results = await _executeCommandsAndGetOutputs(
+        credentials,
         client,
-        'ping $ipAddress repeat 5',
+        ['ping $ipAddress repeat 5'],
       );
-      _logDebug('SSH ping result received');
+      final result = results.isNotEmpty ? results.first : '';
       return _analyzePingResult(result);
     } finally {
       client?.close();
@@ -219,7 +263,6 @@ class SshClientHandler {
   }
 
   String _analyzePingResult(String output) {
-    _logDebug('Analyzing ping result');
     if (output.contains('!!!!!') ||
         output.contains('Success rate is 100') ||
         output.contains('Success rate is 80')) {
@@ -227,12 +270,7 @@ class SshClientHandler {
     } else if (output.contains('.....') ||
         output.contains('Success rate is 0')) {
       return 'Timeout. Gateway is not reachable.';
-    } else if (output.toLowerCase().contains('unknown host')) {
-      return 'Error: Unknown host.';
-    } else if (output.toLowerCase().contains('network unreachable')) {
-      return 'Error: Network unreachable.';
     }
-
     return 'Ping failed. Check the IP or connection.';
   }
 
@@ -241,69 +279,48 @@ class SshClientHandler {
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
   }) async {
-    _logDebug('Applying ECMP config. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
       final List<String> commands = ['configure terminal'];
-
-      // Generate commands to remove old gateways
-      for (final gateway in gatewaysToRemove) {
-        if (gateway.trim().isNotEmpty) {
-          commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
-        }
+      for (final g in gatewaysToRemove) {
+        if (g.trim().isNotEmpty) commands.add('no ip route 0.0.0.0 0.0.0.0 $g');
       }
-
-      // Generate commands to add new gateways
-      for (final gateway in gatewaysToAdd) {
-        if (gateway.trim().isNotEmpty) {
-          commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
-        }
+      for (final g in gatewaysToAdd) {
+        if (g.trim().isNotEmpty) commands.add('ip route 0.0.0.0 0.0.0.0 $g');
       }
       commands.add('end');
 
-      // Do nothing if there are no gateways to add or remove
       if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
-        _logDebug('No changes to apply for ECMP config.');
         return 'No ECMP configuration changes were needed.';
       }
-
-      final result = await _executeSshCommandsWithShell(client, commands);
-      _logDebug('ECMP config commands executed');
+      
+      final results = await _executeCommandsAndGetOutputs(credentials, client, commands);
+      final result = results.join('\n');
 
       if (result.toLowerCase().contains('invalid input') ||
           result.toLowerCase().contains('error')) {
-        _logDebug('Error applying ECMP config: $result');
-        return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+        return 'Failed to apply ECMP configuration. Router response: $result';
       }
-
       return 'ECMP configuration applied successfully.';
     } catch (e) {
-      _logDebug('Error applying ECMP config: $e');
       return 'An error occurred while applying ECMP configuration: ${e.toString()}';
     } finally {
       client?.close();
     }
   }
 
-    Future<String> applyPbrRule({
+  Future<String> applyPbrRule({
     required LBDeviceCredentials credentials,
     required PbrRule rule,
   }) async {
-    _logDebug('Applying PBR rule with SSH: ${rule.ruleName}');
     SSHClient? client;
     try {
       client = await _createSshClient(credentials);
-      
-      // ساخت دستورات PBR
       final List<String> commands = ['configure terminal'];
-      
-      // 1. ساخت Access List (با شماره 101 به عنوان مثال)
-      // TODO: در آینده میتوان شماره ACL را داینامیک کرد
-      final aclCommand = 'access-list 101 permit ${rule.protocol} ${rule.sourceAddress} ${rule.destinationAddress}${rule.destinationPort != 'any' ? ' eq ${rule.destinationPort}' : ''}';
+       final aclCommand =
+          'access-list 101 permit ${rule.protocol} ${rule.sourceAddress} ${rule.destinationAddress}${rule.destinationPort != 'any' ? ' eq ${rule.destinationPort}' : ''}';
       commands.add(aclCommand);
-
-      // 2. ساخت Route Map
       commands.add('route-map ${rule.ruleName} permit 10');
       commands.add('match ip address 101');
       if (rule.actionType == PbrActionType.nextHop) {
@@ -312,19 +329,16 @@ class SshClientHandler {
         commands.add('set interface ${rule.egressInterface}');
       }
       commands.add('exit');
-
-      // 3. اعمال Route Map به اینترفیس
       commands.add('interface ${rule.applyToInterface}');
       commands.add('ip policy route-map ${rule.ruleName}');
       commands.add('end');
 
-      final result = await _executeSshCommandsWithShell(client, commands);
-      _logDebug('PBR config commands executed');
+      final results = await _executeCommandsAndGetOutputs(credentials, client, commands);
+      final result = results.join('\n');
 
       if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
-        return 'Failed to apply PBR configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+        return 'Failed to apply PBR configuration. Router response: $result';
       }
-
       return 'PBR rule "${rule.ruleName}" applied successfully.';
     } catch (e) {
       return 'An error occurred while applying PBR rule: ${e.toString()}';

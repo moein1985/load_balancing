@@ -15,15 +15,15 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
   final GetRouterInterfaces getInterfaces;
   final GetRouterRoutingTable getRoutingTable;
   final PingGateway pingGateway;
-  final ApplyEcmpConfig applyEcmpConfig; // This is the Use Case class
+  final ApplyEcmpConfig applyEcmpConfig;
 
-  // Manage concurrent ping operations
   final Map<String, Timer> _pingTimers = {};
+
   LoadBalancingBloc({
     required this.getInterfaces,
     required this.getRoutingTable,
     required this.pingGateway,
-    required this.applyEcmpConfig, // Injected dependency
+    required this.applyEcmpConfig,
   }) : super(const LoadBalancingState()) {
     on<events.ScreenStarted>(_onScreenStarted);
     on<events.FetchInterfacesRequested>(_onFetchInterfaces);
@@ -36,7 +36,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
 
   @override
   Future<void> close() {
-    // Clean up timers
     for (final timer in _pingTimers.values) {
       timer.cancel();
     }
@@ -50,16 +49,10 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
 
-  /// Helper method to parse gateway IPs from the 'show ip route' command output.
-  /// THIS METHOD HAS BEEN CORRECTED AND MADE MORE ROBUST.
   List<String> _parseEcmpGateways(String routingTable) {
-    final gateways = <String>{}; // Use a Set to handle duplicates automatically.
-    
-    // A more robust regex that looks for the 'via' keyword after a default route pattern.
-    // This handles variations in spacing and formatting.
+    final gateways = <String>{}; 
     final ecmpRegex = RegExp(r'0\.0\.0\.0/0\s.*via\s+([\d\.]+)');
     final subsequentLineRegex = RegExp(r'^\s*\[\d+/\d+\]\s+via\s+([\d\.]+)');
-
     final lines = routingTable.split('\n');
     bool inEcmpBlock = false;
 
@@ -68,33 +61,36 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
         final match = ecmpRegex.firstMatch(line);
         if (match != null) {
           gateways.add(match.group(1)!);
-          inEcmpBlock = true; // Once we find the first line, we enter the block
-          continue; // Move to the next line
+          inEcmpBlock = true;
+          continue;
         }
       }
-
-      // If we are in an ECMP block, check for subsequent indented lines
       if (inEcmpBlock) {
         final match = subsequentLineRegex.firstMatch(line);
         if (match != null) {
           gateways.add(match.group(1)!);
         } else if (line.trim().isNotEmpty && !line.trim().startsWith('[')) {
-          // If the line is not empty and doesn't start with '[', the ECMP block has ended.
           inEcmpBlock = false;
         }
       }
     }
-
     _logDebug('Parsed ECMP gateways (Corrected): ${gateways.toList()}');
     return gateways.toList();
   }
 
-
+  // ***تغییر اصلی و نهایی***
+  // این متد دیگر درخواست تکراری برای اینترفیس نمی‌فرستد
   void _onScreenStarted(events.ScreenStarted event, Emitter<LoadBalancingState> emit) {
     _logDebug('Screen started - IP: ${event.credentials.ip}');
-    emit(state.copyWith(credentials: event.credentials));
-    // Fetch both interfaces and routing table when the screen starts.
-    add(events.FetchInterfacesRequested());
+
+    // مقداردهی اولیه state با داده‌های آماده از صفحه قبل
+    emit(state.copyWith(
+      credentials: event.credentials,
+      interfaces: event.interfaces, // مقداردهی اینترفیس‌ها
+      interfacesStatus: DataStatus.success, // تنظیم وضعیت اینترفیس‌ها به موفقیت
+    ));
+
+    // حالا فقط جدول روتینگ را درخواست می‌کنیم که تکراری نیست
     add(events.FetchRoutingTableRequested());
   }
 
@@ -115,6 +111,8 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     emit(state.copyWith(pingResults: newPingResults));
   }
 
+  // این متد (`_onFetchInterfaces`) اکنون فقط برای رفرش دستی کاربرد دارد
+  // و در زمان بالا آمدن صفحه صدا زده نمی‌شود
   Future<void> _onFetchInterfaces(
     events.FetchInterfacesRequested event,
     Emitter<LoadBalancingState> emit,
@@ -123,8 +121,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       _logDebug('Error: Credentials not available');
       return;
     }
-
-    _logDebug('Starting to fetch interfaces');
+    _logDebug('Starting to fetch interfaces (manual refresh)');
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
     try {
       final interfaces = await getInterfaces(state.credentials!);
@@ -156,7 +153,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       _logDebug('Error: Credentials not available');
       return;
     }
-
     _logDebug('Starting to fetch routing table');
     emit(state.copyWith(
       routingTableStatus: DataStatus.loading,
@@ -164,11 +160,9 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     ));
     try {
       final table = await getRoutingTable(state.credentials!);
-      // After fetching the table, parse it to find existing gateways.
       final gateways = _parseEcmpGateways(table);
       _logDebug('Routing table received, ${gateways.length} ECMP gateways found.');
       
-      // Emit the new state with both the raw table and the parsed gateways.
       emit(state.copyWith(
         routingTable: table,
         routingTableStatus: DataStatus.success,
@@ -197,10 +191,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       _logDebug('Error: Credentials not available');
       return;
     }
-
     final ipAddress = event.ipAddress.trim();
-    
-    // IP Validation
     if (ipAddress.isEmpty) {
       _logDebug('Error: Empty IP for ping');
       final newPingResults = Map<String, String>.from(state.pingResults);
@@ -208,14 +199,10 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       emit(state.copyWith(pingResults: newPingResults));
       return;
     }
-
-    // Check if ping is already in progress
     if (state.pingingIp == ipAddress) {
       _logDebug('Ping for IP $ipAddress is already in progress');
       return;
     }
-
-    // Cancel previous timer if it exists
     _pingTimers[ipAddress]?.cancel();
     _logDebug('Starting ping for IP: $ipAddress');
     emit(state.copyWith(
@@ -261,16 +248,11 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       _logDebug('Error: Credentials not available for applying config');
       return;
     }
-
     _logDebug('Starting to apply ECMP config');
-    
-    // Get the initial list from the state and the final list from the UI event.
     final initialGateways = state.initialEcmpGateways;
     final finalGateways = event.finalGateways;
     _logDebug('Initial Gateways: $initialGateways');
     _logDebug('Final Gateways: $finalGateways');
-
-    // The smart diff logic to determine what to add and what to remove.
     final gatewaysToAdd = finalGateways.where((g) => !initialGateways.contains(g)).toList();
     final gatewaysToRemove = initialGateways.where((g) => !finalGateways.contains(g)).toList();
 
@@ -296,7 +278,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
             status: DataStatus.success,
             successMessage: result,
           ));
-         // After a successful operation, refresh the routing table to reflect the new state in the UI.
          add(events.FetchRoutingTableRequested());
       }
     } catch (e) {

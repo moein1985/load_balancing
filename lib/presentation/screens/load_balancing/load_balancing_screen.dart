@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart'; // این import را اضافه کنید
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
@@ -11,7 +12,13 @@ import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_for
 
 class LoadBalancingScreen extends StatefulWidget {
   final LBDeviceCredentials credentials;
-  const LoadBalancingScreen({super.key, required this.credentials});
+  final List<RouterInterface> initialInterfaces; // *** این پراپرتی اضافه شده است ***
+
+  const LoadBalancingScreen({
+    super.key,
+    required this.credentials,
+    required this.initialInterfaces, // *** این پراپرتی اضافه شده است ***
+  });
 
   @override
   State<LoadBalancingScreen> createState() => _LoadBalancingScreenState();
@@ -21,19 +28,22 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   @override
   void initState() {
     super.initState();
-    // Start the process by passing credentials to the BLoC.
-    context.read<LoadBalancingBloc>().add(ScreenStarted(widget.credentials));
+    // ***تغییر اصلی***
+    // به جای ارسال درخواست تکراری، داده‌های اولیه را به BLoC می‌دهیم
+    context.read<LoadBalancingBloc>().add(ScreenStarted(
+          widget.credentials,
+          widget.initialInterfaces,
+        ));
   }
 
   @override
   Widget build(BuildContext context) {
+    // ... بقیه کد این ویجت هیچ تغییری نکرده و مثل قبل باقی می‌ماند ...
     return Scaffold(
       appBar: AppBar(title: const Text('Load Balancing Configuration')),
-      // دکمه شناور به اینجا منتقل شد
       floatingActionButton: BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
         buildWhen: (prev, curr) => prev.type != curr.type,
         builder: (context, state) {
-          // دکمه فقط زمانی نمایش داده میشود که تب PBR فعال باشد
           if (state.type == LoadBalancingType.pbr) {
             return FloatingActionButton.extended(
               onPressed: () {
@@ -49,12 +59,10 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
               icon: const Icon(Icons.add),
             );
           }
-          // در غیر این صورت، چیزی نمایش داده نمیشود
           return const SizedBox.shrink();
         },
       ),
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
-        // Listen for general status changes (e.g., after applying config)
         listenWhen: (previous, current) => previous.status != current.status,
         listener: (context, state) {
           if (state.status == DataStatus.success &&
@@ -244,8 +252,8 @@ class _RouterInfoSection extends StatelessWidget {
                       ? null
                       : () {
                           context.read<LoadBalancingBloc>().add(
-                            FetchRoutingTableRequested(),
-                          );
+                                FetchRoutingTableRequested(),
+                              );
                         },
                 )
               else

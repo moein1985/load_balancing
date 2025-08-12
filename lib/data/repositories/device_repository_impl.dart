@@ -13,18 +13,23 @@ class DeviceRepositoryImpl implements RouterRepository {
   DeviceRepositoryImpl({required this.remoteDataSource});
 
   @override
-  Future<void> checkCredentials(LBDeviceCredentials credentials) async {
+  // ***تغییر اصلی***
+  // امضای متد و منطق داخلی آن برای برگرداندن لیست اصلاح می‌شود
+  Future<List<RouterInterface>> checkCredentials(LBDeviceCredentials credentials) async {
     // For SSH and Telnet, verifying credentials by fetching interfaces is a reliable check.
     if (credentials.type == ConnectionType.ssh ||
         credentials.type == ConnectionType.telnet) {
       try {
-        await remoteDataSource.fetchInterfaces(credentials);
+        // حالا نتیجه را return می‌کنیم
+        return await remoteDataSource.fetchInterfaces(credentials);
       } on ServerFailure catch (e) {
         throw ServerFailure(e.message);
       } catch (e) {
         throw ServerFailure(e.toString());
       }
     }
+    // برای انواع دیگر اتصال (که فعلا نداریم) یک لیست خالی برمی‌گردانیم
+    return [];
   }
 
   @override

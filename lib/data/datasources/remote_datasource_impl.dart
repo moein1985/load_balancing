@@ -13,15 +13,12 @@ import 'remote_datasource.dart';
 class RemoteDataSourceImpl implements RemoteDataSource {
   final SshClientHandler _sshHandler = SshClientHandler();
   final TelnetClientHandler _telnetHandler = TelnetClientHandler();
-  // A short delay to prevent overwhelming the router with rapid connections.
-  static const Duration _networkDelay = Duration(seconds: 2);
 
   void _logDebug(String message) {
     if (kDebugMode) {
       debugPrint('[REMOTE_DS] $message');
     }
   }
-  // ADDED: Method to fetch the device's hostname
 
   @override
   Future<List<RouterInterface>> fetchInterfaces(
@@ -32,17 +29,15 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     String detailedResult;
 
     if (credentials.type == ConnectionType.ssh) {
-      briefResult = await _sshHandler.fetchInterfaces(credentials);
-      detailedResult = await _sshHandler.fetchDetailedInterfaces(credentials);
+      // *** راه حل نهایی: استفاده از یک جلسه SSH یکپارچه ***
+      // ما از متد جدیدی در ssh_handler استفاده می‌کنیم که هر دو دستور را
+      // در یک اتصال اجرا کرده و نتیجه را به صورت Map برمی‌گرداند.
+      final sshResults = await _sshHandler.fetchInterfaceDataBundle(credentials);
+      briefResult = sshResults['brief'] ?? '';
+      detailedResult = sshResults['detailed'] ?? '';
     } else {
-      // ADDED: Delay before Telnet operations
-      await Future.delayed(_networkDelay);
       briefResult = await _telnetHandler.fetchInterfaces(credentials);
-
-      await Future.delayed(_networkDelay);
-      detailedResult = await _telnetHandler.fetchDetailedInterfaces(
-        credentials,
-      );
+      detailedResult = await _telnetHandler.fetchDetailedInterfaces(credentials);
     }
 
     return _parseDetailedInterfaces(briefResult, detailedResult);
@@ -57,14 +52,11 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     final briefRegex = RegExp(
       r'^(\S+)\s+([\d\.]+|unassigned)\s+\w+\s+\w+\s+(up|down|administratively down)',
     );
-
-    // First, find the main interfaces from the brief output
     final mainInterfaces = <Map<String, String>>[];
     for (final line in briefLines) {
       final match = briefRegex.firstMatch(line);
       if (match != null && match.group(2) != 'unassigned') {
         final interfaceName = match.group(1)!;
-        // Ignore NVI0 as it's a virtual interface
         if (!interfaceName.startsWith('NVI')) {
           mainInterfaces.add({
             'name': interfaceName,
@@ -75,16 +67,12 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       }
     }
 
-    // Then, find secondary addresses from the detailed config
     final secondaryIps = _extractSecondaryIps(detailedResult);
-
-    // Build the final interface list
     for (final interface in mainInterfaces) {
       final interfaceName = interface['name']!;
       final primaryIp = interface['primaryIp']!;
       final status = interface['status']!;
 
-      // Add the primary address
       interfaces.add(
         RouterInterface(
           name: interfaceName,
@@ -92,8 +80,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           status: status,
         ),
       );
-
-      // Add any secondary addresses
       final secondaries = secondaryIps[interfaceName] ?? [];
       for (final secondaryIp in secondaries) {
         interfaces.add(
@@ -117,72 +103,65 @@ class RemoteDataSourceImpl implements RemoteDataSource {
 
     for (final line in lines) {
       final trimmedLine = line.trim();
-      // Find the start of an interface configuration
       if (trimmedLine.startsWith('interface ')) {
-        currentInterface = trimmedLine.split(' ')[1];
-        secondaryIps[currentInterface] = [];
+        currentInterface = trimmedLine.substring('interface '.length);
+        if (currentInterface.isNotEmpty) {
+          secondaryIps[currentInterface] = [];
+        }
+        continue;
       }
-
-      // Find secondary IP addresses
+      if (trimmedLine == '!') {
+        currentInterface = null;
+        continue;
+      }
       if (currentInterface != null &&
-          trimmedLine.contains('ip address') &&
+          trimmedLine.startsWith('ip address') &&
           trimmedLine.contains('secondary')) {
         final parts = trimmedLine.split(' ');
         if (parts.length >= 4) {
           final ipAddress = parts[2];
           if (_isValidIpAddress(ipAddress)) {
-            secondaryIps[currentInterface]!.add(ipAddress);
+            secondaryIps[currentInterface]?.add(ipAddress);
           }
         }
       }
     }
-
+    secondaryIps.removeWhere((key, value) => value.isEmpty);
+    _logDebug('Found secondary IPs: $secondaryIps');
     return secondaryIps;
   }
 
   @override
   Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     _logDebug('Fetching routing table - ${credentials.type}');
-
     String rawResult;
     if (credentials.type == ConnectionType.ssh) {
       rawResult = await _sshHandler.getRoutingTable(credentials);
     } else {
-      // ADDED: Delay before Telnet operations
-      await Future.delayed(_networkDelay);
       rawResult = await _telnetHandler.getRoutingTable(credentials);
     }
-
     return _cleanRoutingTableOutput(rawResult);
   }
 
   String _cleanRoutingTableOutput(String rawResult) {
-    _logDebug(
-      'Cleaning routing table output, input length: ${rawResult.length}',
-    );
+    _logDebug('Cleaning routing table output, input length: ${rawResult.length}');
     final lines = rawResult.split('\n');
     final cleanLines = <String>[];
     bool routeStarted = false;
-
     for (final line in lines) {
       final trimmedLine = line.trim();
-      // Start of the routing table
       if (trimmedLine.startsWith('Codes:') ||
           trimmedLine.startsWith('Gateway of last resort')) {
         routeStarted = true;
       }
-
-      // End of the routing table (prompt)
       if (routeStarted &&
           (trimmedLine.endsWith('#') || trimmedLine.endsWith('>'))) {
         break;
       }
-
       if (routeStarted && trimmedLine.isNotEmpty) {
         cleanLines.add(line);
       }
     }
-
     final result = cleanLines.join('\n').trim();
     _logDebug('Routing table cleaned, length: ${result.length}');
     return result;
@@ -197,19 +176,14 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     if (ipAddress.trim().isEmpty) {
       return 'Error: IP address cannot be empty.';
     }
-
     if (!_isValidIpAddress(ipAddress.trim())) {
       return 'Error: Invalid IP address format.';
     }
-
     final cleanIp = ipAddress.trim();
-
     try {
       if (credentials.type == ConnectionType.ssh) {
         return await _sshHandler.pingGateway(credentials, cleanIp);
       } else {
-        // ADDED: Delay before Telnet operations
-        await Future.delayed(_networkDelay);
         return await _telnetHandler.pingGateway(credentials, cleanIp);
       }
     } catch (e) {
@@ -224,7 +198,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   bool _isValidIpAddress(String ip) {
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip)) return false;
-
     final parts = ip.split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -248,8 +221,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           gatewaysToRemove: gatewaysToRemove,
         );
       } else {
-        // ADDED: Delay before Telnet operations
-        await Future.delayed(_networkDelay);
         return await _telnetHandler.applyEcmpConfig(
           credentials: credentials,
           gatewaysToAdd: gatewaysToAdd,
@@ -278,7 +249,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
           rule: rule,
         );
       } else {
-        await Future.delayed(_networkDelay);
         return await _telnetHandler.applyPbrRule(
           credentials: credentials,
           rule: rule,

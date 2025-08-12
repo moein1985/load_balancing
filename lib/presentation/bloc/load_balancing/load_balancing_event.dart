@@ -1,6 +1,7 @@
 // lib/presentation/bloc/load_balancing/load_balancing_event.dart
 import 'package:equatable/equatable.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart'; // این import را اضافه کنید
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 
 abstract class LoadBalancingEvent extends Equatable {
@@ -9,11 +10,16 @@ abstract class LoadBalancingEvent extends Equatable {
   List<Object?> get props => [];
 }
 
+// ***تغییر اصلی***
+// این رویداد اکنون لیست اینترفیس‌ها را هم در زمان شروع صفحه دریافت می‌کند
 class ScreenStarted extends LoadBalancingEvent {
   final LBDeviceCredentials credentials;
-  const ScreenStarted(this.credentials);
+  final List<RouterInterface> interfaces;
+
+  const ScreenStarted(this.credentials, this.interfaces);
+
   @override
-  List<Object?> get props => [credentials];
+  List<Object?> get props => [credentials, interfaces];
 }
 
 class LoadBalancingTypeSelected extends LoadBalancingEvent {
@@ -42,7 +48,6 @@ class ClearPingResult extends LoadBalancingEvent {
 }
 
 class ApplyEcmpConfig extends LoadBalancingEvent {
-  // Renamed for clarity: this is the final list of gateways from the UI.
   final List<String> finalGateways; 
   const ApplyEcmpConfig({required this.finalGateways});
   @override

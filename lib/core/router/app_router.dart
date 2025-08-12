@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
+import 'package:load_balance/domain/entities/router_interface.dart'; // این import را اضافه کنید
 import 'package:load_balance/presentation/screens/load_balancing/add_edit_pbr_rule_screen.dart';
 import 'package:load_balance/presentation/screens/load_balancing/load_balancing_screen.dart';
 import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
@@ -21,16 +22,23 @@ class AppRouter {
         path: '/config',
         name: 'config',
         builder: (BuildContext context, GoRouterState state) {
-          // این بخش بدون تغییر باقی میماند
-          final credentials = state.extra as LBDeviceCredentials;
-          return LoadBalancingScreen(credentials: credentials);
+          // ***تغییر اصلی***
+          // داده‌ها را به عنوان Map می‌خوانیم و استخراج می‌کنیم
+          final data = state.extra as Map<String, dynamic>;
+          final credentials = data['credentials'] as LBDeviceCredentials;
+          final interfaces = data['interfaces'] as List<RouterInterface>;
+
+          // پارامترهای جدید را به صفحه اصلی پاس می‌دهیم
+          return LoadBalancingScreen(
+            credentials: credentials,
+            initialInterfaces: interfaces,
+          );
         },
         routes: [
           GoRoute(
             path: 'add-pbr-rule',
             name: 'add_pbr_rule',
             builder: (BuildContext context, GoRouterState state) {
-              // **تغییر اصلی:** حالا extra را برای این صفحه هم میخوانیم
               final credentials = state.extra as LBDeviceCredentials?;
               return AddEditPbrRuleScreen(credentials: credentials);
             },

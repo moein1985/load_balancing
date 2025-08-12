@@ -1,4 +1,4 @@
-// presentation/screens/connection/connection_screen.dart
+// presentation/screens/connection/router_connection_screen.dart
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -10,7 +10,6 @@ enum ConnectionType { ssh, telnet }
 
 class RouterConnectionScreen extends StatefulWidget {
   const RouterConnectionScreen({super.key});
-
   @override
   State<RouterConnectionScreen> createState() => _RouterConnectionScreenState();
 }
@@ -23,7 +22,6 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
   final _enablePasswordController = TextEditingController();
   bool _isPasswordVisible = false;
   bool _isEnablePasswordVisible = false;
-
   ConnectionType _selectedType = ConnectionType.ssh;
 
   @override
@@ -66,8 +64,14 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
                   backgroundColor: Colors.green,
                 ),
               );
-            // Navigate and pass credentials to the next screen
-            context.go('/config', extra: state.credentials);
+
+            // ***تغییر اصلی***
+            // به جای ارسال یک آبجکت، یک Map شامل تمام داده‌های لازم را ارسال می‌کنیم
+            context.go('/config', extra: {
+              'credentials': state.credentials,
+              'interfaces': state.interfaces,
+            });
+
           } else if (state is ConnectionFailure) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()

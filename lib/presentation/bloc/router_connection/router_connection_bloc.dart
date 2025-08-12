@@ -26,10 +26,14 @@ class RouterConnectionBloc extends Bloc<RouterConnectionEvent, RouterConnectionS
         enablePassword: event.enablePassword,
         type: event.type,
       );
-      await checkCredentials(credentials);
 
-      // Pass the credentials object in the success state
-      emit(ConnectionSuccess(credentials));
+      // ***تغییر اصلی***
+      // نتیجه usecase (که اکنون لیست اینترفیس‌ها است) را ذخیره می‌کنیم
+      final interfaces = await checkCredentials(credentials);
+
+      // هر دو آبجکت را به state موفقیت پاس می‌دهیم
+      emit(ConnectionSuccess(credentials, interfaces));
+      
     } on ServerFailure catch (e) {
       emit(ConnectionFailure(e.message));
     } catch (e) {

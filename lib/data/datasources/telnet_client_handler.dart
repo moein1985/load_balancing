@@ -246,16 +246,17 @@ class TelnetClientHandler {
     return completer.future;
   }
 
-  Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
-    try {
-      final result = await _executeTelnetCommands(credentials, ['show running-config']);
-      _logDebug('Telnet detailed config fetched');
-      return result;
-    } catch (e) {
-      _logDebug('Error fetching Telnet detailed config: $e');
-      rethrow;
-    }
+Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
+  try {
+    // **FIX:** The _executeTelnetCommands already handles 'terminal length 0'
+    final result = await _executeTelnetCommands(credentials, ['show running-config']);
+    _logDebug('Telnet detailed config fetched');
+    return result;
+  } catch (e) {
+    _logDebug('Error fetching Telnet detailed config: $e');
+    rethrow;
   }
+}
 
   String _analyzePingResult(String output) {
     _logDebug('Analyzing ping result');
