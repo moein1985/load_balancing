@@ -2,12 +2,11 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/utils/validators.dart';
 import 'package:load_balance/domain/entities/access_control_list.dart';
-import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_submission.dart';
 import 'package:load_balance/domain/entities/route_map.dart';
-import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
-import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart'
-    show DataStatus;
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart' show DataStatus;
+import '../../../domain/entities/lb_device_credentials.dart';
+import '../../../domain/usecases/apply_pbr_rule.dart';
 import 'pbr_rule_form_event.dart';
 import 'pbr_rule_form_state.dart';
 
@@ -16,7 +15,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
   final LBDeviceCredentials credentials;
 
   PbrRuleFormBloc({required this.applyPbrRule, required this.credentials})
-    : super(const PbrRuleFormState()) {
+      : super(const PbrRuleFormState()) {
     on<FormLoaded>(_onFormLoaded);
     on<AclModeChanged>(_onAclModeChanged);
     on<ExistingAclSelected>(_onExistingAclSelected);
@@ -38,7 +37,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
 
   void _onFormLoaded(FormLoaded event, Emitter<PbrRuleFormState> emit) {
     if (event.ruleId == null) {
-      // حالت ساخت جدید
+      // Create new mode
       emit(
         state.copyWith(
           formStatus: DataStatus.success,
@@ -54,12 +53,14 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
         ),
       );
     } else {
-      // **منطق جدید برای حالت ویرایش**
+      // Edit mode logic
       final ruleToEdit = event.routeMaps.firstWhere(
         (rm) => rm.name == event.ruleId,
       );
       final associatedAcl = event.acls.firstWhere(
         (acl) => acl.id == ruleToEdit.entries.first.matchAclId,
+        // Provide a fallback in case the ACL is missing
+        orElse: () => const AccessControlList(id: 'unknown', entries: []),
       );
 
       final action = ruleToEdit.entries.first.action;
@@ -69,14 +70,13 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
       final nextHop = action is SetNextHopAction ? action.nextHops.first : '';
       final egressInterface = action is SetInterfaceAction
           ? action.interfaces.first
-          : event.interfaces.first.name;
+          : (event.interfaces.isNotEmpty ? event.interfaces.first.name : '');
 
       emit(
         state.copyWith(
           availableInterfaces: event.interfaces,
           existingAcls: event.acls,
           existingRouteMaps: event.routeMaps,
-          // Pre-fill form fields
           ruleName: ruleToEdit.name,
           aclMode: AclSelectionMode.selectExisting,
           selectedAclId: associatedAcl.id,
@@ -115,7 +115,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     }
     emit(state.copyWith(newAclId: id, newAclIdError: error));
   }
-
+  
   void _onNewAclEntryChanged(
     NewAclEntryChanged event,
     Emitter<PbrRuleFormState> emit,
@@ -131,8 +131,8 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
   ) {
     final entries = List<AclEntry>.from(state.newAclEntries);
     entries.add(
-      AclEntry(
-        sequence: entries.length + 1,
+      const AclEntry(
+        sequence: 1,
         permission: 'permit',
         protocol: 'ip',
         source: 'any',
@@ -198,7 +198,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     }
 
     emit(state.copyWith(formStatus: DataStatus.loading));
-
+    
     AccessControlList? newAcl;
     String aclIdToMatch;
 
@@ -215,7 +215,9 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     final action = state.actionType == PbrActionType.nextHop
         ? SetNextHopAction([state.nextHop])
         : SetInterfaceAction([state.egressInterface]);
-
+    
+    // **FIX APPLIED HERE:**
+    // The `appliedToInterface` now correctly uses the value from the form state.
     final routeMap = RouteMap(
       name: state.ruleName,
       appliedToInterface: state.applyToInterface,

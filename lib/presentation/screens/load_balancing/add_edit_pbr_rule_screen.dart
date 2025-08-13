@@ -27,6 +27,7 @@ class AddEditPbrRuleScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final loadBalancingState = context.read<LoadBalancingBloc>().state;
+    final isEditing = ruleId != null;
 
     return BlocProvider(
       create: (context) {
@@ -51,7 +52,6 @@ class AddEditPbrRuleScreen extends StatelessWidget {
                 content: Text(state.successMessage!),
                 backgroundColor: Colors.green,
               ));
-            // After success, also refresh the list on the previous screen
             context.read<LoadBalancingBloc>().add(FetchPbrConfigurationRequested());
             Navigator.of(context).pop();
           } else if (state.formStatus == DataStatus.failure && state.errorMessage != null) {
@@ -65,7 +65,7 @@ class AddEditPbrRuleScreen extends StatelessWidget {
         },
         child: Scaffold(
           appBar: AppBar(
-            title: Text(ruleId != null ? 'Edit PBR Rule' : 'Add New PBR Rule'),
+            title: Text(isEditing ? 'Edit PBR Rule' : 'Add New PBR Rule'),
             actions: [
               BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
                 builder: (context, state) {
@@ -89,20 +89,19 @@ class AddEditPbrRuleScreen extends StatelessWidget {
               ),
             ],
           ),
-          body: const SingleChildScrollView(
-            padding: EdgeInsets.all(16.0),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(16.0),
             child: Form(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // **بخش جدید برای نام قانون**
-                  _RuleNameCard(),
-                  SizedBox(height: 16),
-                  PbrAclSection(),
-                  SizedBox(height: 16),
-                  RoutingActionCard(),
-                  SizedBox(height: 16),
-                  ApplyInterfaceCard(),
+                  _RuleNameCard(isEditing: isEditing),
+                  const SizedBox(height: 16),
+                  const PbrAclSection(),
+                  const SizedBox(height: 16),
+                  const RoutingActionCard(),
+                  const SizedBox(height: 16),
+                  const ApplyInterfaceCard(),
                 ],
               ),
             ),
@@ -113,9 +112,9 @@ class AddEditPbrRuleScreen extends StatelessWidget {
   }
 }
 
-// **ویجت جدید برای دریافت نام قانون**
 class _RuleNameCard extends StatelessWidget {
-  const _RuleNameCard();
+  final bool isEditing;
+  const _RuleNameCard({this.isEditing = false});
 
   @override
   Widget build(BuildContext context) {
@@ -123,16 +122,20 @@ class _RuleNameCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
-          buildWhen: (p, c) => p.ruleNameError != c.ruleNameError,
+          buildWhen: (p, c) => p.ruleName != c.ruleName || p.ruleNameError != c.ruleNameError,
           builder: (context, state) {
             return TextFormField(
+              initialValue: state.ruleName,
+              // When editing, the name is read-only
+              readOnly: isEditing,
               decoration: InputDecoration(
                 labelText: 'Rule Name (Route-Map Name)',
                 hintText: 'e.g., FROM_LAN_TO_ISP2',
-                errorText: state.ruleNameError,
+                errorText: isEditing ? null : state.ruleNameError,
               ),
-              onChanged: (value) =>
-                  context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
+              onChanged: isEditing
+                  ? null
+                  : (value) => context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
             );
           },
         ),

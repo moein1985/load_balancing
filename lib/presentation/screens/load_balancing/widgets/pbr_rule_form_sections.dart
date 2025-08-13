@@ -7,8 +7,6 @@ import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state
 
 import '../../../bloc/load_balancing/load_balancing_state.dart';
 
-// ویجت TrafficMatchCard به طور کامل حذف شد چون PbrAclSection جایگزین آن شده است.
-
 // -- Section 2: Widget for the routing action --
 class RoutingActionCard extends StatelessWidget {
   const RoutingActionCard({super.key});
@@ -50,13 +48,16 @@ class RoutingActionCard extends StatelessWidget {
                     return FadeTransition(opacity: animation, child: child);
                   },
                   child: state.actionType == PbrActionType.nextHop
-                      ? Padding( // Next-Hop Field
+                      ? Padding(
                           key: const ValueKey('nextHop'),
                           padding: const EdgeInsets.symmetric(horizontal: 16.0),
                           child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
-                            buildWhen: (p, c) => p.nextHopError != c.nextHopError,
+                            buildWhen: (p, c) => p.nextHop != c.nextHop || p.nextHopError != c.nextHopError,
                             builder: (context, state) {
+                              // **FIX ADDED HERE**
+                              // The initialValue property is now set from the BLoC state.
                               return TextFormField(
+                                initialValue: state.nextHop,
                                 decoration: InputDecoration(
                                   labelText: 'Gateway IP Address',
                                   hintText: 'e.g., 192.168.2.1',
@@ -67,7 +68,7 @@ class RoutingActionCard extends StatelessWidget {
                             },
                           ),
                         )
-                      : Padding( // Egress Interface Field
+                      : Padding(
                           key: const ValueKey('egressInterface'),
                           padding: const EdgeInsets.symmetric(horizontal: 16.0),
                           child: DropdownButtonFormField<String>(
