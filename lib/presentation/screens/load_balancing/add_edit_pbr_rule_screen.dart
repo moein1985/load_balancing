@@ -9,7 +9,10 @@ import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_event.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart' show DataStatus;
-import 'widgets/pbr_rule_form_sections.dart';
+import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_acl_section.dart';
+import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_rule_form_sections.dart';
+
+import '../../bloc/load_balancing/load_balancing_event.dart';
 
 class AddEditPbrRuleScreen extends StatelessWidget {
   final LBDeviceCredentials? credentials;
@@ -23,7 +26,7 @@ class AddEditPbrRuleScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final existingInterfaces = context.read<LoadBalancingBloc>().state.interfaces;
+    final loadBalancingState = context.read<LoadBalancingBloc>().state;
 
     return BlocProvider(
       create: (context) {
@@ -32,7 +35,9 @@ class AddEditPbrRuleScreen extends StatelessWidget {
           applyPbrRule: ApplyPbrRule(repository),
           credentials: credentials!,
         )..add(FormLoaded(
-            interfaces: existingInterfaces,
+            interfaces: loadBalancingState.interfaces,
+            acls: loadBalancingState.pbrAccessLists,
+            routeMaps: loadBalancingState.pbrRouteMaps,
             ruleId: ruleId,
           ));
       },
@@ -46,6 +51,8 @@ class AddEditPbrRuleScreen extends StatelessWidget {
                 content: Text(state.successMessage!),
                 backgroundColor: Colors.green,
               ));
+            // After success, also refresh the list on the previous screen
+            context.read<LoadBalancingBloc>().add(FetchPbrConfigurationRequested());
             Navigator.of(context).pop();
           } else if (state.formStatus == DataStatus.failure && state.errorMessage != null) {
             ScaffoldMessenger.of(context)
@@ -58,9 +65,8 @@ class AddEditPbrRuleScreen extends StatelessWidget {
         },
         child: Scaffold(
           appBar: AppBar(
-            title: Text(ruleId != null ? 'Edit: $ruleId' : 'Add New PBR Rule'),
+            title: Text(ruleId != null ? 'Edit PBR Rule' : 'Add New PBR Rule'),
             actions: [
-              // *** بهبود UX: دکمه SAVE فقط در صورت معتبر بودن فرم فعال است ***
               BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
                 builder: (context, state) {
                   if (state.formStatus == DataStatus.loading) {
@@ -74,7 +80,6 @@ class AddEditPbrRuleScreen extends StatelessWidget {
                     );
                   }
                   return TextButton(
-                    // با استفاده از isFormValid دکمه را فعال/غیرفعال می‌کنیم
                     onPressed: state.isFormValid
                         ? () => context.read<PbrRuleFormBloc>().add(FormSubmitted())
                         : null,
@@ -90,7 +95,10 @@ class AddEditPbrRuleScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  TrafficMatchCard(),
+                  // **بخش جدید برای نام قانون**
+                  _RuleNameCard(),
+                  SizedBox(height: 16),
+                  PbrAclSection(),
                   SizedBox(height: 16),
                   RoutingActionCard(),
                   SizedBox(height: 16),
@@ -99,6 +107,34 @@ class AddEditPbrRuleScreen extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// **ویجت جدید برای دریافت نام قانون**
+class _RuleNameCard extends StatelessWidget {
+  const _RuleNameCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
+          buildWhen: (p, c) => p.ruleNameError != c.ruleNameError,
+          builder: (context, state) {
+            return TextFormField(
+              decoration: InputDecoration(
+                labelText: 'Rule Name (Route-Map Name)',
+                hintText: 'e.g., FROM_LAN_TO_ISP2',
+                errorText: state.ruleNameError,
+              ),
+              onChanged: (value) =>
+                  context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
+            );
+          },
         ),
       ),
     );

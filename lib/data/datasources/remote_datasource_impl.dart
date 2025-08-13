@@ -3,16 +3,17 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/entities/pbr_rule.dart';
+import 'package:load_balance/domain/entities/pbr_submission.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
-import 'package:load_balance/data/datasources/ssh_client_handler.dart';
-import 'package:load_balance/data/datasources/telnet_client_handler.dart';
+import 'package:load_balance/data/datasources/handlers/ssh_handler.dart';
+import 'package:load_balance/data/datasources/handlers/telnet_handler.dart';
+import 'handlers/connection_handler.dart';
 import 'remote_datasource.dart';
 
 class RemoteDataSourceImpl implements RemoteDataSource {
-  final SshClientHandler _sshHandler = SshClientHandler();
-  final TelnetClientHandler _telnetHandler = TelnetClientHandler();
+  final ConnectionHandler _sshHandler = SshHandler();
+  final ConnectionHandler _telnetHandler = TelnetHandler();
 
   void _logDebug(String message) {
     if (kDebugMode) {
@@ -20,28 +21,102 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     }
   }
 
+  ConnectionHandler _getHandler(ConnectionType type) {
+    return type == ConnectionType.ssh ? _sshHandler : _telnetHandler;
+  }
+
   @override
   Future<List<RouterInterface>> fetchInterfaces(
     LBDeviceCredentials credentials,
   ) async {
     _logDebug('Fetching interface list - ${credentials.type}');
-    String briefResult;
-    String detailedResult;
-
-    if (credentials.type == ConnectionType.ssh) {
-      // *** راه حل نهایی: استفاده از یک جلسه SSH یکپارچه ***
-      // ما از متد جدیدی در ssh_handler استفاده می‌کنیم که هر دو دستور را
-      // در یک اتصال اجرا کرده و نتیجه را به صورت Map برمی‌گرداند.
-      final sshResults = await _sshHandler.fetchInterfaceDataBundle(credentials);
-      briefResult = sshResults['brief'] ?? '';
-      detailedResult = sshResults['detailed'] ?? '';
-    } else {
-      briefResult = await _telnetHandler.fetchInterfaces(credentials);
-      detailedResult = await _telnetHandler.fetchDetailedInterfaces(credentials);
-    }
-
+    final handler = _getHandler(credentials.type);
+    
+    final results = await handler.fetchInterfaceDataBundle(credentials);
+    final briefResult = results['brief'] ?? '';
+    final detailedResult = results['detailed'] ?? '';
+    
     return _parseDetailedInterfaces(briefResult, detailedResult);
   }
+
+  @override
+  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
+    _logDebug('Fetching routing table - ${credentials.type}');
+    final rawResult = await _getHandler(credentials.type).getRoutingTable(credentials);
+    return _cleanRoutingTableOutput(rawResult);
+  }
+
+  @override
+  Future<String> fetchRunningConfig(LBDeviceCredentials credentials) async {
+    _logDebug('Fetching running-config - ${credentials.type}');
+    return await _getHandler(credentials.type).getRunningConfig(credentials);
+  }
+  
+  @override
+  Future<String> pingGateway(
+    LBDeviceCredentials credentials,
+    String ipAddress,
+  ) async {
+    _logDebug('Starting ping for IP: $ipAddress - ${credentials.type}');
+    if (ipAddress.trim().isEmpty) {
+      return 'Error: IP address cannot be empty.';
+    }
+    if (!_isValidIpAddress(ipAddress.trim())) {
+      return 'Error: Invalid IP address format.';
+    }
+    final cleanIp = ipAddress.trim();
+    try {
+      return await _getHandler(credentials.type).pingGateway(credentials, cleanIp);
+    } catch (e) {
+      _logDebug('Error in ping: $e');
+      if (e is ServerFailure) {
+        return 'Error: ${e.message}';
+      }
+      return 'Error in ping: ${e.toString()}';
+    }
+  }
+
+  @override
+  Future<String> applyEcmpConfig({
+    required LBDeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
+    _logDebug('Applying ECMP config - ${credentials.type}');
+    try {
+      return await _getHandler(credentials.type).applyEcmpConfig(
+        credentials: credentials,
+        gatewaysToAdd: gatewaysToAdd,
+        gatewaysToRemove: gatewaysToRemove,
+      );
+    } on ServerFailure catch (e) {
+      _logDebug('ServerFailure applying ECMP config: ${e.message}');
+      return e.message;
+    } catch (e) {
+      _logDebug('Unknown error applying ECMP config: ${e.toString()}');
+      return 'An unknown error occurred: ${e.toString()}';
+    }
+  }
+
+  @override
+  Future<String> applyPbrRule({
+    required LBDeviceCredentials credentials,
+    required PbrSubmission submission,
+  }) async {
+    _logDebug('Applying PBR rule: ${submission.routeMap.name}');
+    try {
+      return await _getHandler(credentials.type).applyPbrRule(
+        credentials: credentials,
+        submission: submission,
+      );
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'An unknown error occurred: ${e.toString()}';
+    }
+  }
+
+  // --- Private Parsing Helpers ---
 
   List<RouterInterface> _parseDetailedInterfaces(
     String briefResult,
@@ -131,18 +206,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     return secondaryIps;
   }
 
-  @override
-  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
-    _logDebug('Fetching routing table - ${credentials.type}');
-    String rawResult;
-    if (credentials.type == ConnectionType.ssh) {
-      rawResult = await _sshHandler.getRoutingTable(credentials);
-    } else {
-      rawResult = await _telnetHandler.getRoutingTable(credentials);
-    }
-    return _cleanRoutingTableOutput(rawResult);
-  }
-
   String _cleanRoutingTableOutput(String rawResult) {
     _logDebug('Cleaning routing table output, input length: ${rawResult.length}');
     final lines = rawResult.split('\n');
@@ -167,34 +230,6 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     return result;
   }
 
-  @override
-  Future<String> pingGateway(
-    LBDeviceCredentials credentials,
-    String ipAddress,
-  ) async {
-    _logDebug('Starting ping for IP: $ipAddress - ${credentials.type}');
-    if (ipAddress.trim().isEmpty) {
-      return 'Error: IP address cannot be empty.';
-    }
-    if (!_isValidIpAddress(ipAddress.trim())) {
-      return 'Error: Invalid IP address format.';
-    }
-    final cleanIp = ipAddress.trim();
-    try {
-      if (credentials.type == ConnectionType.ssh) {
-        return await _sshHandler.pingGateway(credentials, cleanIp);
-      } else {
-        return await _telnetHandler.pingGateway(credentials, cleanIp);
-      }
-    } catch (e) {
-      _logDebug('Error in ping: $e');
-      if (e is ServerFailure) {
-        return 'Error: ${e.message}';
-      }
-      return 'Error in ping: ${e.toString()}';
-    }
-  }
-
   bool _isValidIpAddress(String ip) {
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip)) return false;
@@ -204,60 +239,5 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       if (num == null || num < 0 || num > 255) return false;
     }
     return true;
-  }
-
-  @override
-  Future<String> applyEcmpConfig({
-    required LBDeviceCredentials credentials,
-    required List<String> gatewaysToAdd,
-    required List<String> gatewaysToRemove,
-  }) async {
-    _logDebug('Applying ECMP config - ${credentials.type}');
-    try {
-      if (credentials.type == ConnectionType.ssh) {
-        return await _sshHandler.applyEcmpConfig(
-          credentials: credentials,
-          gatewaysToAdd: gatewaysToAdd,
-          gatewaysToRemove: gatewaysToRemove,
-        );
-      } else {
-        return await _telnetHandler.applyEcmpConfig(
-          credentials: credentials,
-          gatewaysToAdd: gatewaysToAdd,
-          gatewaysToRemove: gatewaysToRemove,
-        );
-      }
-    } on ServerFailure catch (e) {
-      _logDebug('ServerFailure applying ECMP config: ${e.message}');
-      return e.message;
-    } catch (e) {
-      _logDebug('Unknown error applying ECMP config: ${e.toString()}');
-      return 'An unknown error occurred: ${e.toString()}';
-    }
-  }
-
-  @override
-  Future<String> applyPbrRule({
-    required LBDeviceCredentials credentials,
-    required PbrRule rule,
-  }) async {
-    _logDebug('Applying PBR rule: ${rule.ruleName}');
-    try {
-      if (credentials.type == ConnectionType.ssh) {
-        return await _sshHandler.applyPbrRule(
-          credentials: credentials,
-          rule: rule,
-        );
-      } else {
-        return await _telnetHandler.applyPbrRule(
-          credentials: credentials,
-          rule: rule,
-        );
-      }
-    } on ServerFailure catch (e) {
-      return e.message;
-    } catch (e) {
-      return 'An unknown error occurred: ${e.toString()}';
-    }
   }
 }

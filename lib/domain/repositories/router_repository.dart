@@ -1,15 +1,17 @@
 // lib/domain/repositories/router_repository.dart
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
+import '../entities/pbr_submission.dart';
+
 abstract class RouterRepository {
-  // ***تغییر اصلی***
   // این متد دیگر void نیست و لیست اینترفیس‌ها را برمی‌گرداند
   Future<List<RouterInterface>> checkCredentials(LBDeviceCredentials credentials);
-
   Future<List<RouterInterface>> getInterfaces(LBDeviceCredentials credentials);
   Future<String> getRoutingTable(LBDeviceCredentials credentials);
+
+  /// **متد جدید:** تمام کانفیگ در حال اجرا را به صورت یک رشته خام برمی‌گرداند.
+  Future<String> getRunningConfig(LBDeviceCredentials credentials);
 
   Future<String> pingGateway({
     required LBDeviceCredentials credentials,
@@ -27,6 +29,6 @@ abstract class RouterRepository {
 
   Future<String> applyPbrRule({
     required LBDeviceCredentials credentials,
-    required PbrRule rule,
+    required PbrSubmission submission, 
   });
 }

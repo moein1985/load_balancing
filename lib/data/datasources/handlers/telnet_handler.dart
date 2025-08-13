@@ -1,13 +1,15 @@
-// lib/data/datasources/telnet_client_handler.dart
+// lib/data/datasources/handlers/telnet_handler.dart
 import 'dart:async';
+import 'package:ctelnet/ctelnet.dart';
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:ctelnet/ctelnet.dart';
-import 'package:load_balance/domain/entities/pbr_rule.dart';
-import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
+import 'package:load_balance/domain/entities/pbr_submission.dart';
+import 'package:load_balance/domain/entities/route_map.dart';
+import 'connection_handler.dart';
 
-class TelnetClientHandler {
+class TelnetHandler implements ConnectionHandler {
   static const _commandTimeout = Duration(seconds: 30);
   static const _connectionTimeout = Duration(seconds: 20);
 
@@ -15,6 +17,197 @@ class TelnetClientHandler {
     if (kDebugMode) {
       debugPrint('[TELNET] $message');
     }
+  }
+
+  @override
+  Future<Map<String, String>> fetchInterfaceDataBundle(
+    LBDeviceCredentials credentials,
+  ) async {
+    final brief = await fetchInterfaces(credentials);
+    final detailed = await fetchDetailedInterfaces(credentials);
+    return {'brief': brief, 'detailed': detailed};
+  }
+
+  Future<String> fetchInterfaces(LBDeviceCredentials credentials) async {
+    try {
+      final result = await _executeTelnetCommands(
+          credentials, ['show ip interface brief']);
+      _logDebug('Telnet interfaces fetched');
+      return result;
+    } catch (e) {
+      _logDebug('Error fetching Telnet interfaces: $e');
+      rethrow;
+    }
+  }
+  
+  Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
+    try {
+      final result = await _executeTelnetCommands(credentials, ['show running-config']);
+      _logDebug('Telnet detailed config fetched');
+      return result;
+    } catch (e) {
+      _logDebug('Error fetching Telnet detailed config: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
+    try {
+      final result = await _executeTelnetCommands(credentials, ['show ip route']);
+      _logDebug('Telnet routing table fetched');
+      return result;
+    } catch (e) {
+      _logDebug('Error fetching Telnet routing table: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<String> getRunningConfig(LBDeviceCredentials credentials) async {
+    try {
+      final result = await _executeTelnetCommands(credentials, ['show running-config']);
+      _logDebug('Telnet running-config fetched');
+      return result;
+    } catch (e) {
+      _logDebug('Error fetching Telnet running-config: $e');
+      rethrow;
+    }
+  }
+
+  @override
+  Future<String> pingGateway(
+    LBDeviceCredentials credentials,
+    String ipAddress,
+  ) async {
+    return await _executeTelnetPing(credentials, ipAddress);
+  }
+
+  @override
+  Future<String> applyEcmpConfig({
+    required LBDeviceCredentials credentials,
+    required List<String> gatewaysToAdd,
+    required List<String> gatewaysToRemove,
+  }) async {
+    _logDebug('Applying ECMP config via Telnet. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
+    try {
+      final List<String> commands = ['configure terminal'];
+      for (final gateway in gatewaysToRemove) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+      for (final gateway in gatewaysToAdd) {
+        if (gateway.trim().isNotEmpty) {
+          commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
+        }
+      }
+      commands.add('end');
+
+      if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
+        _logDebug('No changes to apply for ECMP config via Telnet.');
+        return 'No ECMP configuration changes were needed.';
+      }
+      final result = await _executeTelnetCommands(credentials, commands);
+      _logDebug('ECMP config commands sent via Telnet');
+      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+        _logDebug('Error applying ECMP config via Telnet: $result');
+        return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      }
+      return 'ECMP configuration applied successfully.';
+    } catch (e) {
+      _logDebug('Error applying ECMP config via Telnet: $e');
+      return 'An error occurred while applying ECMP configuration: ${e.toString()}';
+    }
+  }
+
+  @override
+  Future<String> applyPbrRule({
+    required LBDeviceCredentials credentials,
+    required PbrSubmission submission,
+  }) async {
+    _logDebug('Applying PBR rule with Telnet: ${submission.routeMap.name}');
+    try {
+      final List<String> commands = ['configure terminal'];
+
+      if (submission.newAcl != null) {
+        commands.add('no access-list ${submission.newAcl!.id}');
+        for (final entry in submission.newAcl!.entries) {
+          commands.add(_buildAclEntryCommand(submission.newAcl!.id, entry));
+        }
+      }
+
+      commands.add('no route-map ${submission.routeMap.name}');
+      for (final entry in submission.routeMap.entries) {
+        commands.add('route-map ${submission.routeMap.name} ${entry.permission} ${entry.sequence}');
+        if (entry.matchAclId != null) {
+          commands.add('match ip address ${entry.matchAclId}');
+        }
+        if (entry.action != null) {
+          if (entry.action is SetNextHopAction) {
+            final nextHops = (entry.action as SetNextHopAction).nextHops.join(' ');
+            commands.add('set ip next-hop $nextHops');
+          } else if (entry.action is SetInterfaceAction) {
+            final interfaces = (entry.action as SetInterfaceAction).interfaces.join(' ');
+            commands.add('set interface $interfaces');
+          }
+        }
+      }
+      commands.add('exit');
+
+      if (submission.routeMap.appliedToInterface != null) {
+        commands.add('interface ${submission.routeMap.appliedToInterface}');
+        commands.add('ip policy route-map ${submission.routeMap.name}');
+      }
+      
+      commands.add('end');
+
+      final result = await _executeTelnetCommands(credentials, commands);
+      _logDebug('PBR config commands executed via Telnet');
+      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+        return 'Failed to apply PBR configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
+      }
+
+      return 'PBR rule "${submission.routeMap.name}" applied successfully.';
+    } catch (e) {
+      return 'An error occurred while applying PBR rule: ${e.toString()}';
+    }
+  }
+
+  // --- Private Helper Methods ---
+
+  String _formatAclAddress(String address) {
+    final trimmedAddress = address.trim();
+    if (trimmedAddress.toLowerCase() == 'any') {
+      return 'any';
+    }
+    if (trimmedAddress.contains(' ')) {
+      return trimmedAddress;
+    }
+    return 'host $trimmedAddress';
+  }
+  
+  String _buildAclEntryCommand(String aclId, AclEntry entry) {
+    final source = _formatAclAddress(entry.source);
+    final destination = _formatAclAddress(entry.destination);
+    return 'access-list $aclId ${entry.permission} ${entry.protocol} $source $destination ${entry.portCondition ?? ''}'.trim();
+  }
+  
+  String _analyzePingResult(String output) {
+    _logDebug('Analyzing ping result');
+    if (output.contains('!!!!!') ||
+        output.contains('Success rate is 100') ||
+        output.contains('Success rate is 80')) {
+      return 'Success! Gateway is reachable.';
+    } else if (output.contains('.....') ||
+        output.contains('Success rate is 0')) {
+      return 'Timeout. Gateway is not reachable.';
+    } else if (output.toLowerCase().contains('unknown host')) {
+      return 'Error: Unknown host.';
+    } else if (output.toLowerCase().contains('network unreachable')) {
+      return 'Error: Network unreachable.';
+    }
+    return 'Ping failed. Check the IP or connection.';
   }
 
   Future<String> _executeTelnetCommands(
@@ -37,7 +230,7 @@ class TelnetClientHandler {
         completer.completeError(const ServerFailure("Telnet operation timed out."));
       }
     });
-    
+
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -50,7 +243,7 @@ class TelnetClientHandler {
         timeoutTimer?.cancel();
         if (!completer.isCompleted) {
           completer.complete(outputBuffer.toString());
-        }
+         }
         subscription?.cancel();
       },
       onError: (error) {
@@ -88,13 +281,13 @@ class TelnetClientHandler {
           case 'login':
             if (receivedText.toLowerCase().contains('username')) {
               client?.send('${credentials.username}\n');
-            } else if (receivedText.toLowerCase().contains('password')) {
+             } else if (receivedText.toLowerCase().contains('password')) {
               client?.send('${credentials.password}\n');
             } else if (receivedText.endsWith('>')) {
               state = 'enable';
               client?.send('enable\n');
             } else if (receivedText.endsWith('#')) {
-              state = 'executing';
+               state = 'executing';
               outputBuffer.clear();
               executeNextCommand();
             }
@@ -133,7 +326,7 @@ class TelnetClientHandler {
 
     return completer.future;
   }
-
+  
   Future<String> _executeTelnetPing(
       LBDeviceCredentials credentials, String ipAddress) async {
     _logDebug('Starting Telnet ping for IP: $ipAddress');
@@ -152,7 +345,7 @@ class TelnetClientHandler {
         completer.complete('Timeout. Gateway is not reachable.');
       }
     });
-    
+
     client = CTelnetClient(
       host: credentials.ip,
       port: 23,
@@ -164,6 +357,7 @@ class TelnetClientHandler {
         if (!completer.isCompleted) {
           final output = outputBuffer.toString();
           final result = _analyzePingResult(output);
+  
           completer.complete(result);
         }
         subscription?.cancel();
@@ -176,6 +370,7 @@ class TelnetClientHandler {
         }
       },
     );
+
     try {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text;
@@ -186,6 +381,7 @@ class TelnetClientHandler {
             receivedText.contains('Success rate is 100') ||
             receivedText.contains('Success rate is 80')) {
           if (!completer.isCompleted) {
+    
             timeoutTimer?.cancel();
             completer.complete('Success! Gateway is reachable.');
             client?.disconnect();
@@ -194,7 +390,8 @@ class TelnetClientHandler {
         } else if (receivedText.contains('.....') ||
             receivedText.contains('Success rate is 0')) {
           if (!completer.isCompleted) {
-            timeoutTimer?.cancel();
+   
+           timeoutTimer?.cancel();
             completer.complete('Timeout. Gateway is not reachable.');
             client?.disconnect();
             return;
@@ -241,155 +438,5 @@ class TelnetClientHandler {
     }
 
     return completer.future;
-  }
-
-  Future<String> fetchDetailedInterfaces(LBDeviceCredentials credentials) async {
-    try {
-      final result = await _executeTelnetCommands(credentials, ['show running-config']);
-      _logDebug('Telnet detailed config fetched');
-      return result;
-    } catch (e) {
-      _logDebug('Error fetching Telnet detailed config: $e');
-      rethrow;
-    }
-  }
-
-  String _analyzePingResult(String output) {
-    _logDebug('Analyzing ping result');
-    if (output.contains('!!!!!') ||
-        output.contains('Success rate is 100') ||
-        output.contains('Success rate is 80')) {
-      return 'Success! Gateway is reachable.';
-    } else if (output.contains('.....') ||
-        output.contains('Success rate is 0')) {
-      return 'Timeout. Gateway is not reachable.';
-    } else if (output.toLowerCase().contains('unknown host')) {
-      return 'Error: Unknown host.';
-    } else if (output.toLowerCase().contains('network unreachable')) {
-      return 'Error: Network unreachable.';
-    }
-    return 'Ping failed. Check the IP or connection.';
-  }
-
-  Future<String> fetchInterfaces(LBDeviceCredentials credentials) async {
-    try {
-      final result = await _executeTelnetCommands(
-          credentials, ['show ip interface brief']);
-      _logDebug('Telnet interfaces fetched');
-      return result;
-    } catch (e) {
-      _logDebug('Error fetching Telnet interfaces: $e');
-      rethrow;
-    }
-  }
-
-  Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
-    try {
-      final result = await _executeTelnetCommands(credentials, ['show ip route']);
-      _logDebug('Telnet routing table fetched');
-      return result;
-    } catch (e) {
-      _logDebug('Error fetching Telnet routing table: $e');
-      rethrow;
-    }
-  }
-
-  Future<String> pingGateway(LBDeviceCredentials credentials, String ipAddress) async {
-    return await _executeTelnetPing(credentials, ipAddress);
-  }
-  
-  Future<String> applyEcmpConfig({
-    required LBDeviceCredentials credentials,
-    required List<String> gatewaysToAdd,
-    required List<String> gatewaysToRemove,
-  }) async {
-    _logDebug('Applying ECMP config via Telnet. ToAdd: ${gatewaysToAdd.join(", ")} - ToRemove: ${gatewaysToRemove.join(", ")}');
-    try {
-      final List<String> commands = ['configure terminal'];
-      for (final gateway in gatewaysToRemove) {
-        if (gateway.trim().isNotEmpty) {
-          commands.add('no ip route 0.0.0.0 0.0.0.0 $gateway');
-        }
-      }
-      for (final gateway in gatewaysToAdd) {
-        if (gateway.trim().isNotEmpty) {
-          commands.add('ip route 0.0.0.0 0.0.0.0 $gateway');
-        }
-      }
-      commands.add('end');
-      if (gatewaysToAdd.isEmpty && gatewaysToRemove.isEmpty) {
-        _logDebug('No changes to apply for ECMP config via Telnet.');
-        return 'No ECMP configuration changes were needed.';
-      }
-      final result = await _executeTelnetCommands(credentials, commands);
-      _logDebug('ECMP config commands sent via Telnet');
-      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
-        _logDebug('Error applying ECMP config via Telnet: $result');
-        return 'Failed to apply ECMP configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
-      }
-      return 'ECMP configuration applied successfully.';
-    } catch (e) {
-      _logDebug('Error applying ECMP config via Telnet: $e');
-      return 'An error occurred while applying ECMP configuration: ${e.toString()}';
-    }
-  }
-
-  /// **متد اصلاح شده نهایی در این فایل**
-  String _buildAclCommand(PbrRule rule) {
-    final protocol = rule.protocol.toLowerCase() == 'any' ? 'ip' : rule.protocol;
-    
-    String source = 'any';
-    if (rule.sourceAddress.toLowerCase() != 'any') {
-      source = 'host ${rule.sourceAddress}';
-    }
-
-    String destination = 'any';
-    if (rule.destinationAddress.toLowerCase() != 'any') {
-      destination = 'host ${rule.destinationAddress}';
-    }
-
-    String port = '';
-    if ((protocol == 'tcp' || protocol == 'udp') && rule.destinationPort.toLowerCase() != 'any') {
-      port = ' eq ${rule.destinationPort}';
-    }
-    
-    return 'access-list 101 permit $protocol $source $destination$port';
-  }
-
-  Future<String> applyPbrRule({
-    required LBDeviceCredentials credentials,
-    required PbrRule rule,
-  }) async {
-    _logDebug('Applying PBR rule with Telnet: ${rule.ruleName}');
-    try {
-      final List<String> commands = ['configure terminal'];
-      
-      // *** تغییر اصلی: استفاده از متد کمکی برای ساخت دستور صحیح ***
-      final aclCommand = _buildAclCommand(rule);
-      commands.add(aclCommand);
-
-      commands.add('route-map ${rule.ruleName} permit 10');
-      commands.add('match ip address 101');
-      if (rule.actionType == PbrActionType.nextHop) {
-        commands.add('set ip next-hop ${rule.nextHop}');
-      } else {
-        commands.add('set interface ${rule.egressInterface}');
-      }
-      commands.add('exit');
-      commands.add('interface ${rule.applyToInterface}');
-      commands.add('ip policy route-map ${rule.ruleName}');
-      commands.add('end');
-
-      final result = await _executeTelnetCommands(credentials, commands);
-      _logDebug('PBR config commands executed via Telnet');
-
-      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
-        return 'Failed to apply PBR configuration. Router response: ${result.split('\n').lastWhere((line) => line.contains('%') || line.contains('^'), orElse: () => 'Unknown error')}';
-      }
-
-      return 'PBR rule "${rule.ruleName}" applied successfully.';
-    } catch (e) {
-      return 'An error occurred while applying PBR rule: ${e.toString()}';
-    }
   }
 }

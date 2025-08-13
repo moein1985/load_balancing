@@ -1,7 +1,6 @@
 // lib/domain/usecases/apply_pbr_rule.dart
-
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/entities/pbr_rule.dart';
+import 'package:load_balance/domain/entities/pbr_submission.dart';
 import 'package:load_balance/domain/repositories/router_repository.dart';
 
 class ApplyPbrRule {
@@ -11,11 +10,11 @@ class ApplyPbrRule {
 
   Future<String> call({
     required LBDeviceCredentials credentials,
-    required PbrRule rule,
+    required PbrSubmission submission,
   }) async {
     return await repository.applyPbrRule(
       credentials: credentials,
-      rule: rule,
+      submission: submission,
     );
   }
 }

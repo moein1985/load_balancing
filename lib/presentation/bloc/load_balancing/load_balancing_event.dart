@@ -1,7 +1,7 @@
 // lib/presentation/bloc/load_balancing/load_balancing_event.dart
 import 'package:equatable/equatable.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/entities/router_interface.dart'; // این import را اضافه کنید
+import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 
 abstract class LoadBalancingEvent extends Equatable {
@@ -10,8 +10,6 @@ abstract class LoadBalancingEvent extends Equatable {
   List<Object?> get props => [];
 }
 
-// ***تغییر اصلی***
-// این رویداد اکنون لیست اینترفیس‌ها را هم در زمان شروع صفحه دریافت می‌کند
 class ScreenStarted extends LoadBalancingEvent {
   final LBDeviceCredentials credentials;
   final List<RouterInterface> interfaces;
@@ -32,6 +30,9 @@ class LoadBalancingTypeSelected extends LoadBalancingEvent {
 class FetchInterfacesRequested extends LoadBalancingEvent {}
 
 class FetchRoutingTableRequested extends LoadBalancingEvent {}
+
+/// **رویداد جدید برای درخواست اطلاعات PBR**
+class FetchPbrConfigurationRequested extends LoadBalancingEvent {}
 
 class PingGatewayRequested extends LoadBalancingEvent {
   final String ipAddress;

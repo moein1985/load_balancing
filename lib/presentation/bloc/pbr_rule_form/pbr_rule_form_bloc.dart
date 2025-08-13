@@ -1,10 +1,12 @@
 // lib/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:load_balance/core/utils/validators.dart'; // ابزار جدید را وارد می‌کنیم
+import 'package:load_balance/core/utils/validators.dart';
+import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/entities/pbr_rule.dart';
+import 'package:load_balance/domain/entities/pbr_submission.dart';
+import 'package:load_balance/domain/entities/route_map.dart';
 import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
-import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart' show DataStatus;
 import 'pbr_rule_form_event.dart';
 import 'pbr_rule_form_state.dart';
 
@@ -15,12 +17,13 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
   PbrRuleFormBloc({required this.applyPbrRule, required this.credentials})
       : super(const PbrRuleFormState()) {
     on<FormLoaded>(_onFormLoaded);
-    // تمام event handler ها برای اعتبارسنجی بازنویسی می‌شوند
+    on<AclModeChanged>(_onAclModeChanged);
+    on<ExistingAclSelected>(_onExistingAclSelected);
+    on<NewAclIdChanged>(_onNewAclIdChanged);
+    on<NewAclEntryChanged>(_onNewAclEntryChanged);
+    on<NewAclEntryAdded>(_onNewAclEntryAdded);
+    on<NewAclEntryRemoved>(_onNewAclEntryRemoved);
     on<RuleNameChanged>(_onRuleNameChanged);
-    on<SourceAddressChanged>(_onSourceAddressChanged);
-    on<DestinationAddressChanged>(_onDestinationAddressChanged);
-    on<ProtocolChanged>((event, emit) => emit(state.copyWith(protocol: event.value)));
-    on<DestinationPortChanged>(_onDestinationPortChanged);
     on<ActionTypeChanged>(_onActionTypeChanged);
     on<NextHopChanged>(_onNextHopChanged);
     on<EgressInterfaceChanged>((event, emit) => emit(state.copyWith(egressInterface: event.value)));
@@ -32,46 +35,74 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     emit(state.copyWith(
       formStatus: DataStatus.success,
       availableInterfaces: event.interfaces,
+      existingAcls: event.acls,
+      existingRouteMaps: event.routeMaps,
+      // اگر اینترفیسی وجود داشت، به عنوان پیش‌فرض انتخاب شود
       egressInterface: event.interfaces.isNotEmpty ? event.interfaces.first.name : '',
       applyToInterface: event.interfaces.isNotEmpty ? event.interfaces.first.name : '',
     ));
   }
 
-  void _onRuleNameChanged(RuleNameChanged event, Emitter<PbrRuleFormState> emit) {
-    emit(state.copyWith(
-      ruleName: event.value,
-      ruleNameError: FormValidators.notEmpty(event.value, 'Rule Name'),
-    ));
+  void _onAclModeChanged(AclModeChanged event, Emitter<PbrRuleFormState> emit) {
+    emit(state.copyWith(aclMode: event.mode));
   }
 
-  void _onSourceAddressChanged(SourceAddressChanged event, Emitter<PbrRuleFormState> emit) {
-    emit(state.copyWith(
-      sourceAddress: event.value,
-      sourceAddressError: FormValidators.networkAddress(event.value),
-    ));
+  void _onExistingAclSelected(ExistingAclSelected event, Emitter<PbrRuleFormState> emit) {
+    emit(state.copyWith(selectedAclId: event.aclId));
   }
 
-  void _onDestinationAddressChanged(DestinationAddressChanged event, Emitter<PbrRuleFormState> emit) {
-    emit(state.copyWith(
-      destinationAddress: event.value,
-      destinationAddressError: FormValidators.networkAddress(event.value),
-    ));
-  }
-
-  void _onDestinationPortChanged(DestinationPortChanged event, Emitter<PbrRuleFormState> emit) {
-    emit(state.copyWith(
-      destinationPort: event.value,
-      destinationPortError: FormValidators.port(event.value),
-    ));
+  void _onNewAclIdChanged(NewAclIdChanged event, Emitter<PbrRuleFormState> emit) {
+    final id = event.id;
+    String? error;
+    if (id.isEmpty) {
+      error = 'ACL number cannot be empty.';
+    } else if (int.tryParse(id) == null) {
+      error = 'Must be a number.';
+    } else if (state.existingAcls.any((acl) => acl.id == id)) {
+      error = 'This ACL number already exists.';
+    }
+    emit(state.copyWith(newAclId: id, newAclIdError: error));
   }
   
-  void _onActionTypeChanged(ActionTypeChanged event, Emitter<PbrRuleFormState> emit) {
-    // هنگام تغییر نوع action، خطای فیلد دیگر را پاک می‌کنیم
-    if (event.value == PbrActionType.nextHop) {
-      emit(state.copyWith(actionType: event.value));
-    } else { // interface
-      emit(state.copyWith(actionType: event.value, nextHopError: null));
+  void _onNewAclEntryChanged(NewAclEntryChanged event, Emitter<PbrRuleFormState> emit) {
+      final entries = List<AclEntry>.from(state.newAclEntries);
+      entries[event.index] = event.entry;
+      emit(state.copyWith(newAclEntries: entries));
+  }
+
+  void _onNewAclEntryAdded(NewAclEntryAdded event, Emitter<PbrRuleFormState> emit) {
+    final entries = List<AclEntry>.from(state.newAclEntries);
+    entries.add(AclEntry(
+      sequence: entries.length + 1,
+      permission: 'permit',
+      protocol: 'ip',
+      source: 'any',
+      destination: 'any',
+    ));
+    emit(state.copyWith(newAclEntries: entries));
+  }
+
+  void _onNewAclEntryRemoved(NewAclEntryRemoved event, Emitter<PbrRuleFormState> emit) {
+    final entries = List<AclEntry>.from(state.newAclEntries);
+    if(entries.length > 1) {
+      entries.removeAt(event.index);
+      emit(state.copyWith(newAclEntries: entries));
     }
+  }
+
+  void _onRuleNameChanged(RuleNameChanged event, Emitter<PbrRuleFormState> emit) {
+    final name = event.value;
+    String? error;
+    if (name.isEmpty) {
+      error = 'Rule name cannot be empty.';
+    } else if (state.existingRouteMaps.any((rm) => rm.name == name)) {
+      error = 'This rule name already exists.';
+    }
+    emit(state.copyWith(ruleName: name, ruleNameError: error));
+  }
+
+  void _onActionTypeChanged(ActionTypeChanged event, Emitter<PbrRuleFormState> emit) {
+    emit(state.copyWith(actionType: event.value, nextHopError: null));
   }
 
   void _onNextHopChanged(NextHopChanged event, Emitter<PbrRuleFormState> emit) {
@@ -82,43 +113,50 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
   }
 
   Future<void> _onFormSubmitted(FormSubmitted event, Emitter<PbrRuleFormState> emit) async {
-    // قبل از ارسال، یک بار دیگر تمام اعتبارسنجی‌ها را اجرا می‌کنیم
-    final nameError = FormValidators.notEmpty(state.ruleName, 'Rule Name');
-    final sourceError = FormValidators.networkAddress(state.sourceAddress);
-    final destError = FormValidators.networkAddress(state.destinationAddress);
-    final portError = FormValidators.port(state.destinationPort);
-    final nextHopError = state.actionType == PbrActionType.nextHop ? FormValidators.ip(state.nextHop) : null;
-    
-    emit(state.copyWith(
-      ruleNameError: nameError,
-      sourceAddressError: sourceError,
-      destinationAddressError: destError,
-      destinationPortError: portError,
-      nextHopError: nextHopError,
-    ));
+    if (!state.isFormValid) {
+       emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: 'Please correct the errors in the form.'));
+       return;
+    }
 
-    // اگر فرم معتبر بود، آن را ارسال می‌کنیم
-    if (state.isFormValid) {
-      emit(state.copyWith(formStatus: DataStatus.loading));
-      final newRule = PbrRule(
-        ruleName: state.ruleName,
-        sourceAddress: state.sourceAddress,
-        destinationAddress: state.destinationAddress,
-        protocol: state.protocol,
-        destinationPort: state.destinationPort,
-        actionType: state.actionType,
-        nextHop: state.nextHop,
-        egressInterface: state.egressInterface,
-        applyToInterface: state.applyToInterface,
-      );
-      try {
-        final result = await applyPbrRule(credentials: credentials, rule: newRule);
-        emit(state.copyWith(formStatus: DataStatus.success, successMessage: result));
-      } catch (e) {
-        emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: e.toString()));
-      }
+    emit(state.copyWith(formStatus: DataStatus.loading));
+    
+    AccessControlList? newAcl;
+    String aclIdToMatch;
+
+    if (state.aclMode == AclSelectionMode.createNew) {
+      aclIdToMatch = state.newAclId;
+      newAcl = AccessControlList(id: aclIdToMatch, entries: state.newAclEntries);
     } else {
-      emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: 'Please correct the errors in the form.'));
+      aclIdToMatch = state.selectedAclId!;
+    }
+
+    final action = state.actionType == PbrActionType.nextHop
+      ? SetNextHopAction([state.nextHop])
+      : SetInterfaceAction([state.egressInterface]);
+
+    final routeMap = RouteMap(
+      name: state.ruleName,
+      appliedToInterface: state.applyToInterface,
+      entries: [
+        RouteMapEntry(
+          permission: 'permit',
+          sequence: 10,
+          matchAclId: aclIdToMatch,
+          action: action,
+        ),
+      ],
+    );
+
+    final submission = PbrSubmission(routeMap: routeMap, newAcl: newAcl);
+
+    try {
+      final result = await applyPbrRule(
+        credentials: credentials,
+        submission: submission,
+      );
+      emit(state.copyWith(formStatus: DataStatus.success, successMessage: result));
+    } catch (e) {
+      emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: e.toString()));
     }
   }
 }

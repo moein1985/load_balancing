@@ -5,6 +5,7 @@ import 'package:load_balance/data/repositories/device_repository_impl.dart';
 import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/check_credentials.dart';
+import 'package:load_balance/domain/usecases/get_pbr_configuration.dart'; 
 import 'package:load_balance/domain/usecases/get_router_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_router_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
@@ -13,7 +14,6 @@ import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_blo
 
 class DependencyInjector extends StatelessWidget {
   final Widget child;
-
   const DependencyInjector({super.key, required this.child});
 
   @override
@@ -37,13 +37,13 @@ class DependencyInjector extends StatelessWidget {
                 getRoutingTable: GetRouterRoutingTable(repository),
                 pingGateway: PingGateway(repository),
                 applyEcmpConfig: ApplyEcmpConfig(repository),
+                // **تزریق Use Case جدید به BLoC**
+                getPbrConfiguration: GetPbrConfiguration(repository),
               );
             },
           ),
-          // ** BlocProvider مربوط به PbrRuleFormBloc از اینجا حذف شد **
-          // چون این BLoC در صفحه خودش ساخته میشود.
         ],
-        child: child, // The MaterialApp will be passed here
+        child: child,
       ),
     );
   }

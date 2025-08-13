@@ -2,25 +2,23 @@
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/data/datasources/remote_datasource.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/entities/pbr_rule.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
+
+import '../../domain/entities/pbr_submission.dart';
 
 class DeviceRepositoryImpl implements RouterRepository {
   final RemoteDataSource remoteDataSource;
 
   DeviceRepositoryImpl({required this.remoteDataSource});
-
+  
   @override
-  // ***تغییر اصلی***
-  // امضای متد و منطق داخلی آن برای برگرداندن لیست اصلاح می‌شود
   Future<List<RouterInterface>> checkCredentials(LBDeviceCredentials credentials) async {
     // For SSH and Telnet, verifying credentials by fetching interfaces is a reliable check.
     if (credentials.type == ConnectionType.ssh ||
         credentials.type == ConnectionType.telnet) {
       try {
-        // حالا نتیجه را return می‌کنیم
         return await remoteDataSource.fetchInterfaces(credentials);
       } on ServerFailure catch (e) {
         throw ServerFailure(e.message);
@@ -28,7 +26,6 @@ class DeviceRepositoryImpl implements RouterRepository {
         throw ServerFailure(e.toString());
       }
     }
-    // برای انواع دیگر اتصال (که فعلا نداریم) یک لیست خالی برمی‌گردانیم
     return [];
   }
 
@@ -56,6 +53,19 @@ class DeviceRepositoryImpl implements RouterRepository {
     }
   }
 
+  /// **متد پیاده‌سازی شده جدید**
+  @override
+  Future<String> getRunningConfig(LBDeviceCredentials credentials) async {
+     try {
+      return await remoteDataSource.fetchRunningConfig(credentials);
+    } on ServerFailure catch (e) {
+      // Re-throw to be handled by the BLoC
+      throw ServerFailure(e.message);
+    } catch (e) {
+      throw ServerFailure(e.toString());
+    }
+  }
+
   @override
   Future<String> pingGateway({
     required LBDeviceCredentials credentials,
@@ -77,7 +87,6 @@ class DeviceRepositoryImpl implements RouterRepository {
     required List<String> gatewaysToRemove,
   }) async {
     try {
-      // Pass the call with the new parameters to the data source
       return await remoteDataSource.applyEcmpConfig(
         credentials: credentials,
         gatewaysToAdd: gatewaysToAdd,
@@ -93,17 +102,18 @@ class DeviceRepositoryImpl implements RouterRepository {
   @override
   Future<String> applyPbrRule({
     required LBDeviceCredentials credentials,
-    required PbrRule rule,
+    required PbrSubmission submission,
   }) async {
     try {
       return await remoteDataSource.applyPbrRule(
         credentials: credentials,
-        rule: rule,
+        submission: submission,
       );
     } on ServerFailure catch (e) {
-      return e.message;
+      // Re-throw to be handled by the use case/bloc
+      throw ServerFailure(e.message);
     } catch (e) {
-      return e.toString();
+      throw ServerFailure(e.toString());
     }
   }
 }

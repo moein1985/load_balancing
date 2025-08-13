@@ -4,10 +4,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
+import 'package:load_balance/domain/usecases/get_pbr_configuration.dart';
 import 'package:load_balance/domain/usecases/get_router_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_router_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
-// Import the event file with a prefix to resolve the name conflict
 import 'load_balancing_event.dart' as events;
 import 'load_balancing_state.dart';
 
@@ -16,6 +16,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
   final GetRouterRoutingTable getRoutingTable;
   final PingGateway pingGateway;
   final ApplyEcmpConfig applyEcmpConfig;
+  final GetPbrConfiguration getPbrConfiguration; // **اضافه شدن Use Case**
 
   final Map<String, Timer> _pingTimers = {};
 
@@ -24,6 +25,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     required this.getRoutingTable,
     required this.pingGateway,
     required this.applyEcmpConfig,
+    required this.getPbrConfiguration, // **اضافه شدن به کانستراکتور**
   }) : super(const LoadBalancingState()) {
     on<events.ScreenStarted>(_onScreenStarted);
     on<events.FetchInterfacesRequested>(_onFetchInterfaces);
@@ -32,6 +34,8 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     on<events.LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
     on<events.ApplyEcmpConfig>(_onApplyEcmpConfig);
     on<events.ClearPingResult>(_onClearPingResult);
+    // **ثبت Event Handler جدید**
+    on<events.FetchPbrConfigurationRequested>(_onFetchPbrConfiguration);
   }
 
   @override
@@ -49,13 +53,59 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
 
+  // **هندلر جدید برای دریافت و تجزیه و تحلیل PBR**
+  Future<void> _onFetchPbrConfiguration(
+    events.FetchPbrConfigurationRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    if (state.credentials == null) return;
+    _logDebug('Starting to fetch PBR configuration');
+    emit(state.copyWith(pbrStatus: DataStatus.loading));
+    try {
+      final pbrConfig = await getPbrConfiguration(state.credentials!);
+      _logDebug('PBR config received: ${pbrConfig.routeMaps.length} route-maps found.');
+      emit(state.copyWith(
+        pbrStatus: DataStatus.success,
+        pbrRouteMaps: pbrConfig.routeMaps,
+        pbrAccessLists: pbrConfig.accessLists,
+      ));
+    } on ServerFailure catch (e) {
+      _logDebug('Error fetching PBR config: ${e.message}');
+      emit(state.copyWith(
+        pbrStatus: DataStatus.failure,
+        pbrError: e.message,
+      ));
+    } catch (e) {
+      _logDebug('Unknown error fetching PBR config: $e');
+      emit(state.copyWith(
+        pbrStatus: DataStatus.failure,
+        pbrError: 'An unknown error occurred while fetching PBR rules.',
+      ));
+    }
+  }
+  
+  // **تغییر در این هندلر برای ارسال رویداد جدید**
+  void _onLoadBalancingTypeSelected(
+    events.LoadBalancingTypeSelected event,
+    Emitter<LoadBalancingState> emit,
+  ) {
+    _logDebug('Load Balancing type selected: ${event.type}');
+    emit(state.copyWith(type: event.type));
+
+    // اگر کاربر تب PBR را انتخاب کرد و اطلاعات قبلاً دریافت نشده، درخواست را ارسال کن
+    if (event.type == LoadBalancingType.pbr && state.pbrStatus == DataStatus.initial) {
+      add(events.FetchPbrConfigurationRequested());
+    }
+  }
+
+  // ... سایر متدهای BLoC بدون تغییر باقی می‌مانند ...
+  // (کدهای قبلی)
   List<String> _parseEcmpGateways(String routingTable) {
     final gateways = <String>{}; 
     final ecmpRegex = RegExp(r'0\.0\.0\.0/0\s.*via\s+([\d\.]+)');
     final subsequentLineRegex = RegExp(r'^\s*\[\d+/\d+\]\s+via\s+([\d\.]+)');
     final lines = routingTable.split('\n');
     bool inEcmpBlock = false;
-
     for (final line in lines) {
       if (line.contains('0.0.0.0/0')) {
         final match = ecmpRegex.firstMatch(line);
@@ -78,28 +128,14 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     return gateways.toList();
   }
 
-  // ***تغییر اصلی و نهایی***
-  // این متد دیگر درخواست تکراری برای اینترفیس نمی‌فرستد
   void _onScreenStarted(events.ScreenStarted event, Emitter<LoadBalancingState> emit) {
     _logDebug('Screen started - IP: ${event.credentials.ip}');
-
-    // مقداردهی اولیه state با داده‌های آماده از صفحه قبل
     emit(state.copyWith(
       credentials: event.credentials,
-      interfaces: event.interfaces, // مقداردهی اینترفیس‌ها
-      interfacesStatus: DataStatus.success, // تنظیم وضعیت اینترفیس‌ها به موفقیت
+      interfaces: event.interfaces, 
+      interfacesStatus: DataStatus.success, 
     ));
-
-    // حالا فقط جدول روتینگ را درخواست می‌کنیم که تکراری نیست
     add(events.FetchRoutingTableRequested());
-  }
-
-  void _onLoadBalancingTypeSelected(
-    events.LoadBalancingTypeSelected event,
-    Emitter<LoadBalancingState> emit,
-  ) {
-    _logDebug('Load Balancing type selected: ${event.type}');
-    emit(state.copyWith(type: event.type));
   }
 
   void _onClearPingResult(
@@ -111,8 +147,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     emit(state.copyWith(pingResults: newPingResults));
   }
 
-  // این متد (`_onFetchInterfaces`) اکنون فقط برای رفرش دستی کاربرد دارد
-  // و در زمان بالا آمدن صفحه صدا زده نمی‌شود
   Future<void> _onFetchInterfaces(
     events.FetchInterfacesRequested event,
     Emitter<LoadBalancingState> emit,
@@ -255,7 +289,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     _logDebug('Final Gateways: $finalGateways');
     final gatewaysToAdd = finalGateways.where((g) => !initialGateways.contains(g)).toList();
     final gatewaysToRemove = initialGateways.where((g) => !finalGateways.contains(g)).toList();
-
     _logDebug('Gateways to Add: $gatewaysToAdd');
     _logDebug('Gateways to Remove: $gatewaysToRemove');
 
@@ -278,7 +311,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
             status: DataStatus.success,
             successMessage: result,
           ));
-         add(events.FetchRoutingTableRequested());
+        add(events.FetchRoutingTableRequested());
       }
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');
