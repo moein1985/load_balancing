@@ -18,7 +18,6 @@ class _EcmpFormState extends State<EcmpForm> {
 
   @override
   void dispose() {
-    // Ensure all dynamically created controllers are disposed
     for (final controller in _gatewayControllers) {
       controller.dispose();
     }
@@ -32,7 +31,6 @@ class _EcmpFormState extends State<EcmpForm> {
   }
 
   void _removeGatewayField(int index) {
-    // Dispose the controller before removing it from the list
     _gatewayControllers[index].dispose();
     setState(() {
       _gatewayControllers.removeAt(index);
@@ -41,13 +39,10 @@ class _EcmpFormState extends State<EcmpForm> {
 
   void _applyEcmpConfig() {
     if (_formKey.currentState!.validate()) {
-      // Collect the final list of gateways from the UI controllers.
-      // The BLoC will handle the comparison.
       final gateways = _gatewayControllers
           .map((controller) => controller.text.trim())
-          .where((ip) => ip.isNotEmpty) // Filter out empty fields
+          .where((ip) => ip.isNotEmpty)
           .toList();
-      
       context.read<LoadBalancingBloc>().add(
             events.ApplyEcmpConfig(finalGateways: gateways),
           );
@@ -77,20 +72,15 @@ class _EcmpFormState extends State<EcmpForm> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
-
-              // BlocConsumer handles both listening to state changes and building the UI
               BlocConsumer<LoadBalancingBloc, LoadBalancingState>(
-                // Listen only when the list of initial gateways changes
                 listenWhen: (prev, curr) => prev.initialEcmpGateways != curr.initialEcmpGateways,
                 listener: (context, state) {
                   _updateControllersFromState(state.initialEcmpGateways);
                 },
-                // Build the UI based on the current state
                 buildWhen: (prev, curr) => 
-                    prev.initialEcmpGateways != curr.initialEcmpGateways || 
+                    prev.initialEcmpGateways != curr.initialEcmpGateways ||
                     prev.routingTableStatus != curr.routingTableStatus,
                 builder: (context, state) {
-                  // Show a loading indicator while the config is being read for the first time
                   if (state.routingTableStatus == DataStatus.loading && _gatewayControllers.isEmpty) {
                     return const Padding(
                       padding: EdgeInsets.symmetric(vertical: 20.0),
@@ -98,7 +88,6 @@ class _EcmpFormState extends State<EcmpForm> {
                     );
                   }
                   
-                  // Once loaded, build the dynamic list of fields
                   return ListView.separated(
                     physics: const NeverScrollableScrollPhysics(),
                     shrinkWrap: true,
@@ -114,7 +103,6 @@ class _EcmpFormState extends State<EcmpForm> {
                               label: 'Gateway ${index + 1}',
                             ),
                           ),
-                          // Allow removing fields if there is more than one
                           if (_gatewayControllers.length > 1)
                             Padding(
                               padding: const EdgeInsets.only(left: 8.0, top: 8.0),
@@ -142,7 +130,6 @@ class _EcmpFormState extends State<EcmpForm> {
               ),
               const SizedBox(height: 24),
               BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
-                // Rebuild the button only when the overall status changes
                 buildWhen: (prev, curr) => prev.status != curr.status,
                 builder: (context, state) {
                   if (state.status == DataStatus.loading) {
@@ -166,16 +153,11 @@ class _EcmpFormState extends State<EcmpForm> {
     );
   }
 
-  /// **CORRECTED LOGIC**
-  /// Safely updates the list of controllers based on the BLoC state.
   void _updateControllersFromState(List<String> newGateways) {
-    // First, dispose all existing controllers to prevent memory leaks.
     for (final controller in _gatewayControllers) {
       controller.dispose();
     }
     _gatewayControllers.clear();
-
-    // Create new controllers for each gateway found on the router.
     for (final ip in newGateways) {
       _gatewayControllers.add(TextEditingController(text: ip));
     }
@@ -186,25 +168,20 @@ class _EcmpFormState extends State<EcmpForm> {
       _gatewayControllers.add(TextEditingController());
     }
 
-    // Trigger a rebuild to show the new set of controllers.
     if(mounted) {
       setState(() {});
     }
   }
 }
 
-/// **CORRECTED AND OPTIMIZED WIDGET**
-/// This widget is now structured to only rebuild the necessary parts on ping updates.
 class _GatewayInputField extends StatelessWidget {
   final TextEditingController controller;
   final String label;
-
   const _GatewayInputField({
     super.key,
     required this.controller,
     required this.label,
   });
-
   static final _ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
 
   bool _isValidIp(String ip) {
@@ -223,7 +200,6 @@ class _GatewayInputField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // The TextFormField is no longer inside a BlocBuilder that listens to pings.
         TextFormField(
           controller: controller,
           validator: (value) {
@@ -237,10 +213,8 @@ class _GatewayInputField extends StatelessWidget {
             labelText: label,
             hintText: 'e.g., 192.168.1.1',
             border: const OutlineInputBorder(),
-            // The suffix icon IS rebuilt based on ping status.
             suffixIcon: BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
               buildWhen: (prev, curr) {
-                // Rebuild only if the ping status for THIS specific IP changes.
                 final ip = controller.text.trim();
                 return prev.pingingIp == ip || curr.pingingIp == ip || prev.pingResults[ip] != curr.pingResults[ip];
               },
@@ -248,7 +222,6 @@ class _GatewayInputField extends StatelessWidget {
                 final ipAddress = controller.text.trim();
                 final isPinging = state.pingingIp == ipAddress;
                 final canPing = ipAddress.isNotEmpty && _isValidIp(ipAddress) && !isPinging;
-
                 if (isPinging) {
                   return const Padding(
                     padding: EdgeInsets.all(12.0),
@@ -274,7 +247,6 @@ class _GatewayInputField extends StatelessWidget {
             ),
           ),
         ),
-        // The ping result box IS also rebuilt based on ping status.
         BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
            buildWhen: (prev, curr) {
                 final ip = controller.text.trim();
@@ -285,7 +257,7 @@ class _GatewayInputField extends StatelessWidget {
             final pingResult = state.pingResults[ipAddress];
 
             if (pingResult == null) {
-              return const SizedBox.shrink(); // Return nothing if there is no result
+              return const SizedBox.shrink();
             }
             return Padding(
               padding: const EdgeInsets.only(top: 8.0),

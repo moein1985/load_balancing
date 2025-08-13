@@ -1,5 +1,6 @@
 // lib/presentation/bloc/load_balancing/load_balancing_bloc.dart
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/error/failure.dart';
@@ -16,7 +17,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
   final GetRouterRoutingTable getRoutingTable;
   final PingGateway pingGateway;
   final ApplyEcmpConfig applyEcmpConfig;
-  final GetPbrConfiguration getPbrConfiguration; // **اضافه شدن Use Case**
+  final GetPbrConfiguration getPbrConfiguration;
 
   final Map<String, Timer> _pingTimers = {};
 
@@ -25,7 +26,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     required this.getRoutingTable,
     required this.pingGateway,
     required this.applyEcmpConfig,
-    required this.getPbrConfiguration, // **اضافه شدن به کانستراکتور**
+    required this.getPbrConfiguration,
   }) : super(const LoadBalancingState()) {
     on<events.ScreenStarted>(_onScreenStarted);
     on<events.FetchInterfacesRequested>(_onFetchInterfaces);
@@ -34,7 +35,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     on<events.LoadBalancingTypeSelected>(_onLoadBalancingTypeSelected);
     on<events.ApplyEcmpConfig>(_onApplyEcmpConfig);
     on<events.ClearPingResult>(_onClearPingResult);
-    // **ثبت Event Handler جدید**
     on<events.FetchPbrConfigurationRequested>(_onFetchPbrConfiguration);
   }
 
@@ -53,7 +53,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
 
-  // **هندلر جدید برای دریافت و تجزیه و تحلیل PBR**
   Future<void> _onFetchPbrConfiguration(
     events.FetchPbrConfigurationRequested event,
     Emitter<LoadBalancingState> emit,
@@ -84,7 +83,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
   }
   
-  // **تغییر در این هندلر برای ارسال رویداد جدید**
   void _onLoadBalancingTypeSelected(
     events.LoadBalancingTypeSelected event,
     Emitter<LoadBalancingState> emit,
@@ -92,14 +90,16 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     _logDebug('Load Balancing type selected: ${event.type}');
     emit(state.copyWith(type: event.type));
 
-    // اگر کاربر تب PBR را انتخاب کرد و اطلاعات قبلاً دریافت نشده، درخواست را ارسال کن
     if (event.type == LoadBalancingType.pbr && state.pbrStatus == DataStatus.initial) {
       add(events.FetchPbrConfigurationRequested());
     }
+    // **FIX ADDED HERE**
+    // When switching back to ECMP, always refresh the routing table to get the latest gateways.
+    else if (event.type == LoadBalancingType.ecmp) {
+      add(events.FetchRoutingTableRequested());
+    }
   }
 
-  // ... سایر متدهای BLoC بدون تغییر باقی می‌مانند ...
-  // (کدهای قبلی)
   List<String> _parseEcmpGateways(String routingTable) {
     final gateways = <String>{}; 
     final ecmpRegex = RegExp(r'0\.0\.0\.0/0\s.*via\s+([\d\.]+)');
