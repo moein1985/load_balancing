@@ -18,13 +18,21 @@ class SshHandler implements ConnectionHandler {
   }
 
   @override
-  Future<Map<String, String>> fetchInterfaceDataBundle(LBDeviceCredentials credentials) async {
+  Future<Map<String, String>> fetchInterfaceDataBundle(
+    LBDeviceCredentials credentials,
+  ) async {
     _logDebug('Preparing interface data bundle commands');
     final client = await _executor.createSshClient(credentials);
     try {
-      final commands = ['terminal length 0', 'show ip interface brief', 'show running-config'];
+      final commands = [
+        'terminal length 0',
+        'show ip interface brief',
+        'show running-config',
+      ];
       final results = await _executor.execute(credentials, client, commands);
-      if (results.length < 3) throw Exception('Failed to get all required outputs for interfaces.');
+      if (results.length < 3) {
+        throw Exception('Failed to get all required outputs for interfaces.');
+      }
       return {'brief': results[1], 'detailed': results[2]};
     } finally {
       client.close();
@@ -58,7 +66,10 @@ class SshHandler implements ConnectionHandler {
   }
 
   @override
-  Future<String> pingGateway(LBDeviceCredentials credentials, String ipAddress) async {
+  Future<String> pingGateway(
+    LBDeviceCredentials credentials,
+    String ipAddress,
+  ) async {
     _logDebug('Preparing ping command');
     final client = await _executor.createSshClient(credentials);
     try {
@@ -79,17 +90,24 @@ class SshHandler implements ConnectionHandler {
   }) async {
     _logDebug('Preparing ECMP commands');
     final commands = <String>['configure terminal'];
-    gatewaysToRemove.where((g) => g.trim().isNotEmpty).forEach((g) => commands.add('no ip route 0.0.0.0 0.0.0.0 $g'));
-    gatewaysToAdd.where((g) => g.trim().isNotEmpty).forEach((g) => commands.add('ip route 0.0.0.0 0.0.0.0 $g'));
+    gatewaysToRemove
+        .where((g) => g.trim().isNotEmpty)
+        .forEach((g) => commands.add('no ip route 0.0.0.0 0.0.0.0 $g'));
+    gatewaysToAdd
+        .where((g) => g.trim().isNotEmpty)
+        .forEach((g) => commands.add('ip route 0.0.0.0 0.0.0.0 $g'));
     commands.add('end');
 
-    if (commands.length <= 2) return 'No ECMP configuration changes were needed.';
+    if (commands.length <= 2) {
+      return 'No ECMP configuration changes were needed.';
+    }
 
     final client = await _executor.createSshClient(credentials);
     try {
       final results = await _executor.execute(credentials, client, commands);
       final result = results.join('\n');
-      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+      if (result.toLowerCase().contains('invalid input') ||
+          result.toLowerCase().contains('error')) {
         return 'Failed to apply ECMP configuration. Router response: $result';
       }
       return 'ECMP configuration applied successfully.';
@@ -115,13 +133,19 @@ class SshHandler implements ConnectionHandler {
 
     commands.add('no route-map ${submission.routeMap.name}');
     for (final entry in submission.routeMap.entries) {
-      commands.add('route-map ${submission.routeMap.name} ${entry.permission} ${entry.sequence}');
-      if (entry.matchAclId != null) commands.add('match ip address ${entry.matchAclId}');
+      commands.add(
+        'route-map ${submission.routeMap.name} ${entry.permission} ${entry.sequence}',
+      );
+      if (entry.matchAclId != null) {
+        commands.add('match ip address ${entry.matchAclId}');
+      }
       if (entry.action is SetNextHopAction) {
         final nextHops = (entry.action as SetNextHopAction).nextHops.join(' ');
         commands.add('set ip next-hop $nextHops');
       } else if (entry.action is SetInterfaceAction) {
-        final interfaces = (entry.action as SetInterfaceAction).interfaces.join(' ');
+        final interfaces = (entry.action as SetInterfaceAction).interfaces.join(
+          ' ',
+        );
         commands.add('set interface $interfaces');
       }
     }
@@ -131,14 +155,15 @@ class SshHandler implements ConnectionHandler {
       commands.add('interface ${submission.routeMap.appliedToInterface}');
       commands.add('ip policy route-map ${submission.routeMap.name}');
     }
-    
+
     commands.add('end');
 
     final client = await _executor.createSshClient(credentials);
     try {
       final results = await _executor.execute(credentials, client, commands);
       final result = results.join('\n');
-      if (result.toLowerCase().contains('invalid input') || result.toLowerCase().contains('error')) {
+      if (result.toLowerCase().contains('invalid input') ||
+          result.toLowerCase().contains('error')) {
         return 'Failed to apply PBR configuration. Router response: $result';
       }
       return 'PBR rule "${submission.routeMap.name}" applied successfully.';
@@ -146,28 +171,69 @@ class SshHandler implements ConnectionHandler {
       client.close();
     }
   }
-
-  // --- Private Helper Methods ---
-
   String _analyzePingResult(String output) {
-    if (output.contains('!!!!!') || output.contains('Success rate is 100') || output.contains('Success rate is 80')) {
+    if (output.contains('!!!!!') ||
+        output.contains('Success rate is 100') ||
+        output.contains('Success rate is 80')) {
       return 'Success! Gateway is reachable.';
-    } else if (output.contains('.....') || output.contains('Success rate is 0')) {
+    } else if (output.contains('.....') ||
+        output.contains('Success rate is 0')) {
       return 'Timeout. Gateway is not reachable.';
     }
     return 'Ping failed. Check the IP or connection.';
   }
-  
+
   String _formatAclAddress(String address) {
     final trimmedAddress = address.trim();
     if (trimmedAddress.toLowerCase() == 'any') return 'any';
     if (trimmedAddress.contains(' ')) return trimmedAddress;
     return 'host $trimmedAddress';
   }
-  
+
   String _buildAclEntryCommand(String aclId, AclEntry entry) {
     final source = _formatAclAddress(entry.source);
     final destination = _formatAclAddress(entry.destination);
-    return 'access-list $aclId ${entry.permission} ${entry.protocol} $source $destination ${entry.portCondition ?? ''}'.trim();
+    return 'access-list $aclId ${entry.permission} ${entry.protocol} $source $destination ${entry.portCondition ?? ''}'
+        .trim();
+  }
+
+  @override
+  Future<String> deletePbrRule({
+    required LBDeviceCredentials credentials,
+    required RouteMap ruleToDelete,
+  }) async {
+    _logDebug('Preparing PBR delete commands for rule: ${ruleToDelete.name}');
+    final commands = <String>['configure terminal'];
+
+    // 1. Remove policy from interface
+    if (ruleToDelete.appliedToInterface != null) {
+      commands.add('interface ${ruleToDelete.appliedToInterface}');
+      commands.add('no ip policy route-map ${ruleToDelete.name}');
+      commands.add('exit');
+    }
+
+    // 2. Remove route-map
+    commands.add('no route-map ${ruleToDelete.name}');
+
+    // 3. Remove associated ACL (assuming it's not shared)
+    final aclId = ruleToDelete.entries.first.matchAclId;
+    if (aclId != null) {
+      commands.add('no access-list $aclId');
+    }
+
+    commands.add('end');
+
+    final client = await _executor.createSshClient(credentials);
+    try {
+      final results = await _executor.execute(credentials, client, commands);
+      final result = results.join('\n');
+      if (result.toLowerCase().contains('invalid input') ||
+          result.toLowerCase().contains('error')) {
+        return 'Failed to delete PBR rule. Router response: $result';
+      }
+      return 'PBR rule "${ruleToDelete.name}" deleted successfully.';
+    } finally {
+      client.close();
+    }
   }
 }

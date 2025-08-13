@@ -6,7 +6,8 @@ import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_submission.dart';
 import 'package:load_balance/domain/entities/route_map.dart';
 import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
-import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart' show DataStatus;
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart'
+    show DataStatus;
 import 'pbr_rule_form_event.dart';
 import 'pbr_rule_form_state.dart';
 
@@ -15,7 +16,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
   final LBDeviceCredentials credentials;
 
   PbrRuleFormBloc({required this.applyPbrRule, required this.credentials})
-      : super(const PbrRuleFormState()) {
+    : super(const PbrRuleFormState()) {
     on<FormLoaded>(_onFormLoaded);
     on<AclModeChanged>(_onAclModeChanged);
     on<ExistingAclSelected>(_onExistingAclSelected);
@@ -26,32 +27,83 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     on<RuleNameChanged>(_onRuleNameChanged);
     on<ActionTypeChanged>(_onActionTypeChanged);
     on<NextHopChanged>(_onNextHopChanged);
-    on<EgressInterfaceChanged>((event, emit) => emit(state.copyWith(egressInterface: event.value)));
-    on<ApplyToInterfaceChanged>((event, emit) => emit(state.copyWith(applyToInterface: event.value)));
+    on<EgressInterfaceChanged>(
+      (event, emit) => emit(state.copyWith(egressInterface: event.value)),
+    );
+    on<ApplyToInterfaceChanged>(
+      (event, emit) => emit(state.copyWith(applyToInterface: event.value)),
+    );
     on<FormSubmitted>(_onFormSubmitted);
   }
 
   void _onFormLoaded(FormLoaded event, Emitter<PbrRuleFormState> emit) {
-    emit(state.copyWith(
-      formStatus: DataStatus.success,
-      availableInterfaces: event.interfaces,
-      existingAcls: event.acls,
-      existingRouteMaps: event.routeMaps,
-      // اگر اینترفیسی وجود داشت، به عنوان پیش‌فرض انتخاب شود
-      egressInterface: event.interfaces.isNotEmpty ? event.interfaces.first.name : '',
-      applyToInterface: event.interfaces.isNotEmpty ? event.interfaces.first.name : '',
-    ));
+    if (event.ruleId == null) {
+      // حالت ساخت جدید
+      emit(
+        state.copyWith(
+          formStatus: DataStatus.success,
+          availableInterfaces: event.interfaces,
+          existingAcls: event.acls,
+          existingRouteMaps: event.routeMaps,
+          egressInterface: event.interfaces.isNotEmpty
+              ? event.interfaces.first.name
+              : '',
+          applyToInterface: event.interfaces.isNotEmpty
+              ? event.interfaces.first.name
+              : '',
+        ),
+      );
+    } else {
+      // **منطق جدید برای حالت ویرایش**
+      final ruleToEdit = event.routeMaps.firstWhere(
+        (rm) => rm.name == event.ruleId,
+      );
+      final associatedAcl = event.acls.firstWhere(
+        (acl) => acl.id == ruleToEdit.entries.first.matchAclId,
+      );
+
+      final action = ruleToEdit.entries.first.action;
+      final actionType = action is SetNextHopAction
+          ? PbrActionType.nextHop
+          : PbrActionType.interface;
+      final nextHop = action is SetNextHopAction ? action.nextHops.first : '';
+      final egressInterface = action is SetInterfaceAction
+          ? action.interfaces.first
+          : event.interfaces.first.name;
+
+      emit(
+        state.copyWith(
+          availableInterfaces: event.interfaces,
+          existingAcls: event.acls,
+          existingRouteMaps: event.routeMaps,
+          // Pre-fill form fields
+          ruleName: ruleToEdit.name,
+          aclMode: AclSelectionMode.selectExisting,
+          selectedAclId: associatedAcl.id,
+          actionType: actionType,
+          nextHop: nextHop,
+          egressInterface: egressInterface,
+          applyToInterface: ruleToEdit.appliedToInterface ?? '',
+        ),
+      );
+    }
   }
 
   void _onAclModeChanged(AclModeChanged event, Emitter<PbrRuleFormState> emit) {
     emit(state.copyWith(aclMode: event.mode));
   }
 
-  void _onExistingAclSelected(ExistingAclSelected event, Emitter<PbrRuleFormState> emit) {
+  void _onExistingAclSelected(
+    ExistingAclSelected event,
+    Emitter<PbrRuleFormState> emit,
+  ) {
     emit(state.copyWith(selectedAclId: event.aclId));
   }
 
-  void _onNewAclIdChanged(NewAclIdChanged event, Emitter<PbrRuleFormState> emit) {
+  void _onNewAclIdChanged(
+    NewAclIdChanged event,
+    Emitter<PbrRuleFormState> emit,
+  ) {
     final id = event.id;
     String? error;
     if (id.isEmpty) {
@@ -63,34 +115,48 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     }
     emit(state.copyWith(newAclId: id, newAclIdError: error));
   }
-  
-  void _onNewAclEntryChanged(NewAclEntryChanged event, Emitter<PbrRuleFormState> emit) {
-      final entries = List<AclEntry>.from(state.newAclEntries);
-      entries[event.index] = event.entry;
-      emit(state.copyWith(newAclEntries: entries));
-  }
 
-  void _onNewAclEntryAdded(NewAclEntryAdded event, Emitter<PbrRuleFormState> emit) {
+  void _onNewAclEntryChanged(
+    NewAclEntryChanged event,
+    Emitter<PbrRuleFormState> emit,
+  ) {
     final entries = List<AclEntry>.from(state.newAclEntries);
-    entries.add(AclEntry(
-      sequence: entries.length + 1,
-      permission: 'permit',
-      protocol: 'ip',
-      source: 'any',
-      destination: 'any',
-    ));
+    entries[event.index] = event.entry;
     emit(state.copyWith(newAclEntries: entries));
   }
 
-  void _onNewAclEntryRemoved(NewAclEntryRemoved event, Emitter<PbrRuleFormState> emit) {
+  void _onNewAclEntryAdded(
+    NewAclEntryAdded event,
+    Emitter<PbrRuleFormState> emit,
+  ) {
     final entries = List<AclEntry>.from(state.newAclEntries);
-    if(entries.length > 1) {
+    entries.add(
+      AclEntry(
+        sequence: entries.length + 1,
+        permission: 'permit',
+        protocol: 'ip',
+        source: 'any',
+        destination: 'any',
+      ),
+    );
+    emit(state.copyWith(newAclEntries: entries));
+  }
+
+  void _onNewAclEntryRemoved(
+    NewAclEntryRemoved event,
+    Emitter<PbrRuleFormState> emit,
+  ) {
+    final entries = List<AclEntry>.from(state.newAclEntries);
+    if (entries.length > 1) {
       entries.removeAt(event.index);
       emit(state.copyWith(newAclEntries: entries));
     }
   }
 
-  void _onRuleNameChanged(RuleNameChanged event, Emitter<PbrRuleFormState> emit) {
+  void _onRuleNameChanged(
+    RuleNameChanged event,
+    Emitter<PbrRuleFormState> emit,
+  ) {
     final name = event.value;
     String? error;
     if (name.isEmpty) {
@@ -101,38 +167,54 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     emit(state.copyWith(ruleName: name, ruleNameError: error));
   }
 
-  void _onActionTypeChanged(ActionTypeChanged event, Emitter<PbrRuleFormState> emit) {
+  void _onActionTypeChanged(
+    ActionTypeChanged event,
+    Emitter<PbrRuleFormState> emit,
+  ) {
     emit(state.copyWith(actionType: event.value, nextHopError: null));
   }
 
   void _onNextHopChanged(NextHopChanged event, Emitter<PbrRuleFormState> emit) {
-    emit(state.copyWith(
-      nextHop: event.value,
-      nextHopError: FormValidators.ip(event.value),
-    ));
+    emit(
+      state.copyWith(
+        nextHop: event.value,
+        nextHopError: FormValidators.ip(event.value),
+      ),
+    );
   }
 
-  Future<void> _onFormSubmitted(FormSubmitted event, Emitter<PbrRuleFormState> emit) async {
+  Future<void> _onFormSubmitted(
+    FormSubmitted event,
+    Emitter<PbrRuleFormState> emit,
+  ) async {
     if (!state.isFormValid) {
-       emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: 'Please correct the errors in the form.'));
-       return;
+      emit(
+        state.copyWith(
+          formStatus: DataStatus.failure,
+          errorMessage: 'Please correct the errors in the form.',
+        ),
+      );
+      return;
     }
 
     emit(state.copyWith(formStatus: DataStatus.loading));
-    
+
     AccessControlList? newAcl;
     String aclIdToMatch;
 
     if (state.aclMode == AclSelectionMode.createNew) {
       aclIdToMatch = state.newAclId;
-      newAcl = AccessControlList(id: aclIdToMatch, entries: state.newAclEntries);
+      newAcl = AccessControlList(
+        id: aclIdToMatch,
+        entries: state.newAclEntries,
+      );
     } else {
       aclIdToMatch = state.selectedAclId!;
     }
 
     final action = state.actionType == PbrActionType.nextHop
-      ? SetNextHopAction([state.nextHop])
-      : SetInterfaceAction([state.egressInterface]);
+        ? SetNextHopAction([state.nextHop])
+        : SetInterfaceAction([state.egressInterface]);
 
     final routeMap = RouteMap(
       name: state.ruleName,
@@ -154,9 +236,16 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
         credentials: credentials,
         submission: submission,
       );
-      emit(state.copyWith(formStatus: DataStatus.success, successMessage: result));
+      emit(
+        state.copyWith(formStatus: DataStatus.success, successMessage: result),
+      );
     } catch (e) {
-      emit(state.copyWith(formStatus: DataStatus.failure, errorMessage: e.toString()));
+      emit(
+        state.copyWith(
+          formStatus: DataStatus.failure,
+          errorMessage: e.toString(),
+        ),
+      );
     }
   }
 }

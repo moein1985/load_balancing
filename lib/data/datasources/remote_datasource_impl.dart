@@ -8,6 +8,7 @@ import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
 import 'package:load_balance/data/datasources/handlers/ssh_handler.dart';
 import 'package:load_balance/data/datasources/handlers/telnet_handler.dart';
+import '../../domain/entities/route_map.dart';
 import 'handlers/connection_handler.dart';
 import 'remote_datasource.dart';
 
@@ -31,18 +32,20 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   ) async {
     _logDebug('Fetching interface list - ${credentials.type}');
     final handler = _getHandler(credentials.type);
-    
+
     final results = await handler.fetchInterfaceDataBundle(credentials);
     final briefResult = results['brief'] ?? '';
     final detailedResult = results['detailed'] ?? '';
-    
+
     return _parseDetailedInterfaces(briefResult, detailedResult);
   }
 
   @override
   Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     _logDebug('Fetching routing table - ${credentials.type}');
-    final rawResult = await _getHandler(credentials.type).getRoutingTable(credentials);
+    final rawResult = await _getHandler(
+      credentials.type,
+    ).getRoutingTable(credentials);
     return _cleanRoutingTableOutput(rawResult);
   }
 
@@ -51,7 +54,7 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     _logDebug('Fetching running-config - ${credentials.type}');
     return await _getHandler(credentials.type).getRunningConfig(credentials);
   }
-  
+
   @override
   Future<String> pingGateway(
     LBDeviceCredentials credentials,
@@ -66,7 +69,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
     }
     final cleanIp = ipAddress.trim();
     try {
-      return await _getHandler(credentials.type).pingGateway(credentials, cleanIp);
+      return await _getHandler(
+        credentials.type,
+      ).pingGateway(credentials, cleanIp);
     } catch (e) {
       _logDebug('Error in ping: $e');
       if (e is ServerFailure) {
@@ -105,10 +110,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }) async {
     _logDebug('Applying PBR rule: ${submission.routeMap.name}');
     try {
-      return await _getHandler(credentials.type).applyPbrRule(
-        credentials: credentials,
-        submission: submission,
-      );
+      return await _getHandler(
+        credentials.type,
+      ).applyPbrRule(credentials: credentials, submission: submission);
     } on ServerFailure catch (e) {
       return e.message;
     } catch (e) {
@@ -207,7 +211,9 @@ class RemoteDataSourceImpl implements RemoteDataSource {
   }
 
   String _cleanRoutingTableOutput(String rawResult) {
-    _logDebug('Cleaning routing table output, input length: ${rawResult.length}');
+    _logDebug(
+      'Cleaning routing table output, input length: ${rawResult.length}',
+    );
     final lines = rawResult.split('\n');
     final cleanLines = <String>[];
     bool routeStarted = false;
@@ -239,5 +245,22 @@ class RemoteDataSourceImpl implements RemoteDataSource {
       if (num == null || num < 0 || num > 255) return false;
     }
     return true;
+  }
+
+  @override
+  Future<String> deletePbrRule({
+    required LBDeviceCredentials credentials,
+    required RouteMap ruleToDelete,
+  }) async {
+    _logDebug('Deleting PBR rule: ${ruleToDelete.name}');
+    try {
+      return await _getHandler(
+        credentials.type,
+      ).deletePbrRule(credentials: credentials, ruleToDelete: ruleToDelete);
+    } on ServerFailure catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'An unknown error occurred: ${e.toString()}';
+    }
   }
 }

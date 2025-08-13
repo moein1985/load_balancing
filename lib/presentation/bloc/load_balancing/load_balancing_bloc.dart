@@ -9,6 +9,7 @@ import 'package:load_balance/domain/usecases/get_pbr_configuration.dart';
 import 'package:load_balance/domain/usecases/get_router_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_router_routing_table.dart';
 import 'package:load_balance/domain/usecases/ping_gateway.dart';
+import '../../../domain/usecases/delete_pbr_rule.dart';
 import 'load_balancing_event.dart' as events;
 import 'load_balancing_state.dart';
 
@@ -18,15 +19,16 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
   final PingGateway pingGateway;
   final ApplyEcmpConfig applyEcmpConfig;
   final GetPbrConfiguration getPbrConfiguration;
-
+  final DeletePbrRule deletePbrRule;
   final Map<String, Timer> _pingTimers = {};
 
-  LoadBalancingBloc({
+  LoadBalancingBloc( {
     required this.getInterfaces,
     required this.getRoutingTable,
     required this.pingGateway,
     required this.applyEcmpConfig,
     required this.getPbrConfiguration,
+    required this.deletePbrRule,
   }) : super(const LoadBalancingState()) {
     on<events.ScreenStarted>(_onScreenStarted);
     on<events.FetchInterfacesRequested>(_onFetchInterfaces);
@@ -36,6 +38,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     on<events.ApplyEcmpConfig>(_onApplyEcmpConfig);
     on<events.ClearPingResult>(_onClearPingResult);
     on<events.FetchPbrConfigurationRequested>(_onFetchPbrConfiguration);
+    on<events.DeletePbrRuleRequested>(_onDeletePbrRule);
   }
 
   @override
@@ -275,6 +278,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
   }
 
   Future<void> _onApplyEcmpConfig(
+
     events.ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
@@ -321,4 +325,25 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       ));
     }
   }
+
+    Future<void> _onDeletePbrRule(
+    events.DeletePbrRuleRequested event,
+    Emitter<LoadBalancingState> emit,
+  ) async {
+    if (state.credentials == null) return;
+    emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
+    try {
+      final result = await deletePbrRule(
+        credentials: state.credentials!,
+        ruleToDelete: event.ruleToDelete,
+      );
+      emit(state.copyWith(status: DataStatus.success, successMessage: result));
+      // Refresh the list after deletion
+      add(events.FetchPbrConfigurationRequested());
+    } catch (e) {
+      emit(state.copyWith(status: DataStatus.failure, error: e.toString()));
+    }
+  }
+
+
 }

@@ -2,6 +2,8 @@
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/pbr_submission.dart';
 
+import '../../../domain/entities/route_map.dart';
+
 /// Defines the contract for connection handlers (SSH, Telnet, etc.).
 /// This ensures that the RemoteDataSource can interact with any handler
 /// in a consistent way.
@@ -19,10 +21,7 @@ abstract class ConnectionHandler {
   Future<String> getRunningConfig(LBDeviceCredentials credentials);
 
   /// Executes a ping command on the device.
-  Future<String> pingGateway(
-    LBDeviceCredentials credentials,
-    String ipAddress,
-  );
+  Future<String> pingGateway(LBDeviceCredentials credentials, String ipAddress);
 
   /// Applies an ECMP (Equal-Cost Multi-Path) configuration.
   Future<String> applyEcmpConfig({
@@ -35,5 +34,10 @@ abstract class ConnectionHandler {
   Future<String> applyPbrRule({
     required LBDeviceCredentials credentials,
     required PbrSubmission submission,
+  });
+
+  Future<String> deletePbrRule({
+    required LBDeviceCredentials credentials,
+    required RouteMap ruleToDelete,
   });
 }

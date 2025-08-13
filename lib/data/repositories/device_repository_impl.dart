@@ -7,14 +7,17 @@ import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
 
 import '../../domain/entities/pbr_submission.dart';
+import '../../domain/entities/route_map.dart';
 
 class DeviceRepositoryImpl implements RouterRepository {
   final RemoteDataSource remoteDataSource;
 
   DeviceRepositoryImpl({required this.remoteDataSource});
-  
+
   @override
-  Future<List<RouterInterface>> checkCredentials(LBDeviceCredentials credentials) async {
+  Future<List<RouterInterface>> checkCredentials(
+    LBDeviceCredentials credentials,
+  ) async {
     // For SSH and Telnet, verifying credentials by fetching interfaces is a reliable check.
     if (credentials.type == ConnectionType.ssh ||
         credentials.type == ConnectionType.telnet) {
@@ -56,7 +59,7 @@ class DeviceRepositoryImpl implements RouterRepository {
   /// **متد پیاده‌سازی شده جدید**
   @override
   Future<String> getRunningConfig(LBDeviceCredentials credentials) async {
-     try {
+    try {
       return await remoteDataSource.fetchRunningConfig(credentials);
     } on ServerFailure catch (e) {
       // Re-throw to be handled by the BLoC
@@ -111,6 +114,23 @@ class DeviceRepositoryImpl implements RouterRepository {
       );
     } on ServerFailure catch (e) {
       // Re-throw to be handled by the use case/bloc
+      throw ServerFailure(e.message);
+    } catch (e) {
+      throw ServerFailure(e.toString());
+    }
+  }
+
+  @override
+  Future<String> deletePbrRule({
+    required LBDeviceCredentials credentials,
+    required RouteMap ruleToDelete,
+  }) async {
+    try {
+      return await remoteDataSource.deletePbrRule(
+        credentials: credentials,
+        ruleToDelete: ruleToDelete,
+      );
+    } on ServerFailure catch (e) {
       throw ServerFailure(e.message);
     } catch (e) {
       throw ServerFailure(e.toString());

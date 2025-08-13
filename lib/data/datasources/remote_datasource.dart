@@ -3,6 +3,7 @@ import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
 import '../../domain/entities/pbr_submission.dart';
+import '../../domain/entities/route_map.dart';
 
 abstract class RemoteDataSource {
   Future<List<RouterInterface>> fetchInterfaces(LBDeviceCredentials credentials);
@@ -23,4 +24,6 @@ abstract class RemoteDataSource {
     required LBDeviceCredentials credentials,
     required PbrSubmission  submission,
   });
+
+  Future<String> deletePbrRule({ required LBDeviceCredentials credentials, required RouteMap ruleToDelete });
 }

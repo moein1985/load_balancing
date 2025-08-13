@@ -4,6 +4,8 @@ import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 
+import '../../../domain/entities/route_map.dart';
+
 abstract class LoadBalancingEvent extends Equatable {
   const LoadBalancingEvent();
   @override
@@ -61,4 +63,11 @@ class ApplyPbrConfig extends LoadBalancingEvent {
   const ApplyPbrConfig({required this.sourceNetwork, required this.gateway});
   @override
   List<Object> get props => [sourceNetwork, gateway];
+}
+
+class DeletePbrRuleRequested extends LoadBalancingEvent {
+  final RouteMap ruleToDelete;
+  const DeletePbrRuleRequested(this.ruleToDelete);
+  @override
+  List<Object> get props => [ruleToDelete];
 }

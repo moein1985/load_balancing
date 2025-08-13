@@ -5,6 +5,7 @@ import 'package:load_balance/data/repositories/device_repository_impl.dart';
 import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/check_credentials.dart';
+import 'package:load_balance/domain/usecases/delete_pbr_rule.dart';
 import 'package:load_balance/domain/usecases/get_pbr_configuration.dart'; 
 import 'package:load_balance/domain/usecases/get_router_interfaces.dart';
 import 'package:load_balance/domain/usecases/get_router_routing_table.dart';
@@ -39,6 +40,7 @@ class DependencyInjector extends StatelessWidget {
                 applyEcmpConfig: ApplyEcmpConfig(repository),
                 // **تزریق Use Case جدید به BLoC**
                 getPbrConfiguration: GetPbrConfiguration(repository),
+                deletePbrRule: DeletePbrRule(repository),
               );
             },
           ),

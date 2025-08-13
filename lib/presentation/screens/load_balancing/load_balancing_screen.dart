@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/entities/router_interface.dart'; // این import را اضافه کنید
+import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
@@ -12,12 +12,12 @@ import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_for
 
 class LoadBalancingScreen extends StatefulWidget {
   final LBDeviceCredentials credentials;
-  final List<RouterInterface> initialInterfaces; // *** این پراپرتی اضافه شده است ***
+  final List<RouterInterface> initialInterfaces;
 
   const LoadBalancingScreen({
     super.key,
     required this.credentials,
-    required this.initialInterfaces, // *** این پراپرتی اضافه شده است ***
+    required this.initialInterfaces,
   });
 
   @override
@@ -28,8 +28,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   @override
   void initState() {
     super.initState();
-    // ***تغییر اصلی***
-    // به جای ارسال درخواست تکراری، داده‌های اولیه را به BLoC می‌دهیم
     context.read<LoadBalancingBloc>().add(ScreenStarted(
           widget.credentials,
           widget.initialInterfaces,
@@ -38,7 +36,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ... بقیه کد این ویجت هیچ تغییری نکرده و مثل قبل باقی می‌ماند ...
     return Scaffold(
       appBar: AppBar(title: const Text('Load Balancing Configuration')),
       floatingActionButton: BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
@@ -47,10 +44,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
           if (state.type == LoadBalancingType.pbr) {
             return FloatingActionButton.extended(
               onPressed: () {
-                final credentials = context
-                    .read<LoadBalancingBloc>()
-                    .state
-                    .credentials;
+                final credentials = context.read<LoadBalancingBloc>().state.credentials;
                 if (credentials != null) {
                   context.pushNamed('add_pbr_rule', extra: credentials);
                 }
@@ -65,8 +59,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
         listenWhen: (previous, current) => previous.status != current.status,
         listener: (context, state) {
-          if (state.status == DataStatus.success &&
-              state.successMessage != null) {
+          if (state.status == DataStatus.success && state.successMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -75,8 +68,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                   backgroundColor: Colors.green,
                 ),
               );
-          } else if (state.status == DataStatus.failure &&
-              state.error.isNotEmpty) {
+          } else if (state.status == DataStatus.failure && state.error.isNotEmpty) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -88,7 +80,8 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
           }
         },
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          // **اصلاح اصلی:** اضافه کردن padding به پایین صفحه برای جلوگیری از همپوشانی با دکمه شناور
+          padding: const EdgeInsets.fromLTRB(24.0, 24.0, 24.0, 90.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -116,14 +109,14 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                     selected: {state.type},
                     onSelectionChanged: (Set<LoadBalancingType> newSelection) {
                       context.read<LoadBalancingBloc>().add(
-                        LoadBalancingTypeSelected(newSelection.first),
-                      );
+                            LoadBalancingTypeSelected(newSelection.first),
+                          );
                     },
                   );
                 },
               ),
               const SizedBox(height: 24),
-              const _RouterInfoSection(), // Widget for smart features
+              const _RouterInfoSection(),
               const SizedBox(height: 24),
               BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
                 builder: (context, state) {
@@ -142,7 +135,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   }
 }
 
-// A private widget to display router info (Interfaces and Routing Table)
+// ... (ویجت _RouterInfoSection بدون تغییر باقی می‌ماند) ...
 class _RouterInfoSection extends StatelessWidget {
   const _RouterInfoSection();
   @override

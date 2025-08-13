@@ -1,7 +1,11 @@
 // lib/presentation/screens/load_balancing/widgets/pbr_rule_card.dart
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:go_router/go_router.dart';
 import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/route_map.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart';
 
 class PbrRuleCard extends StatelessWidget {
   final RouteMap routeMap;
@@ -45,26 +49,66 @@ class PbrRuleCard extends StatelessWidget {
             ),
           ),
           Container(
-            color: colorScheme.onSurface.withAlpha(26), // Corrected from withOpacity
+            color: colorScheme.onSurface.withAlpha(26),
             padding: const EdgeInsets.symmetric(horizontal: 8.0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                // دکمه ویرایش
                 IconButton(
                   icon: const Icon(Icons.edit_outlined),
                   tooltip: 'Edit Rule',
-                  onPressed: () { /* TODO: Implement Edit */ },
+                  onPressed: () {
+                    final credentials = context.read<LoadBalancingBloc>().state.credentials;
+                    if (credentials != null) {
+                      context.pushNamed(
+                        'edit_pbr_rule',
+                        pathParameters: {'ruleId': routeMap.name},
+                        extra: credentials,
+                      );
+                    }
+                  },
                 ),
+                // دکمه حذف
                 IconButton(
                   icon: Icon(Icons.delete_outline, color: colorScheme.error),
                   tooltip: 'Delete Rule',
-                  onPressed: () { /* TODO: Implement Delete */ },
+                  onPressed: () => _showDeleteConfirmation(context, routeMap),
                 ),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+
+  // متد برای نمایش دیالوگ تأیید حذف
+  void _showDeleteConfirmation(BuildContext context, RouteMap routeMap) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Rule'),
+          content: Text('Are you sure you want to delete the PBR rule "${routeMap.name}"?\nThis action cannot be undone.'),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+            TextButton(
+              child: Text('Delete', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              onPressed: () {
+                // ارسال رویداد حذف به BLoC
+                context.read<LoadBalancingBloc>().add(DeletePbrRuleRequested(routeMap));
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -81,7 +125,7 @@ class PbrRuleCard extends StatelessWidget {
           context,
           icon: Icons.filter_alt_outlined,
           title: 'Match (#${entry.sequence}):',
-          value: acl.entries.map((e) => e.summary).join('\n'),
+          value: acl.entries.isNotEmpty ? acl.entries.map((e) => e.summary).join('\n') : 'ACL not found or empty',
         ),
       );
       widgets.add(const SizedBox(height: 8));

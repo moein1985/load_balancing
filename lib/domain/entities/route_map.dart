@@ -73,4 +73,6 @@ class RouteMap extends Equatable {
       appliedToInterface: appliedToInterface ?? this.appliedToInterface,
     );
   }
+
+  
 }
