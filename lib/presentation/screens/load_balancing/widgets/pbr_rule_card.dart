@@ -10,18 +10,15 @@ import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_eve
 class PbrRuleCard extends StatelessWidget {
   final RouteMap routeMap;
   final List<AccessControlList> allAcls;
-
   const PbrRuleCard({
     super.key,
     required this.routeMap,
     required this.allAcls,
   });
-
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final colorScheme = Theme.of(context).colorScheme;
-
     return Card(
       clipBehavior: Clip.antiAlias,
       margin: const EdgeInsets.only(bottom: 16.0),
@@ -58,14 +55,19 @@ class PbrRuleCard extends StatelessWidget {
                 IconButton(
                   icon: const Icon(Icons.edit_outlined),
                   tooltip: 'Edit Rule',
-                  onPressed: () {
+                  onPressed: () async { // متد را async کنید
                     final credentials = context.read<LoadBalancingBloc>().state.credentials;
                     if (credentials != null) {
-                      context.pushNamed(
+                      // منتظر نتیجه بازگشتی از صفحه ویرایش باشید
+                      final result = await context.pushNamed<RouteMap?>(
                         'edit_pbr_rule',
                         pathParameters: {'ruleId': routeMap.name},
                         extra: credentials,
                       );
+                      // اگر رولی بازگردانده شد، رویداد آپدیت را ارسال کنید
+                      if (result != null && context.mounted) {
+                        context.read<LoadBalancingBloc>().add(PbrRuleUpserted(result));
+                      }
                     }
                   },
                 ),
@@ -119,13 +121,12 @@ class PbrRuleCard extends StatelessWidget {
         (acl) => acl.id == entry.matchAclId,
         orElse: () => const AccessControlList(id: 'Unknown', entries: []),
       );
-
       widgets.add(
         _buildInfoRow(
           context,
           icon: Icons.filter_alt_outlined,
           title: 'Match (#${entry.sequence}):',
-          value: acl.entries.isNotEmpty ? acl.entries.map((e) => e.summary).join('\n') : 'ACL not found or empty',
+          value: acl.entries.isNotEmpty ? acl.entries.map((e) => e.summary).join('\n') : 'ACL ${entry.matchAclId ?? ""} not found or empty',
         ),
       );
       widgets.add(const SizedBox(height: 8));

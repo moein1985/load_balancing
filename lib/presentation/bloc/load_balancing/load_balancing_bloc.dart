@@ -1,9 +1,9 @@
 // lib/presentation/bloc/load_balancing/load_balancing_bloc.dart
 import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/entities/route_map.dart';
 import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/get_pbr_configuration.dart';
 import 'package:load_balance/domain/usecases/get_router_interfaces.dart';
@@ -39,6 +39,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     on<events.ClearPingResult>(_onClearPingResult);
     on<events.FetchPbrConfigurationRequested>(_onFetchPbrConfiguration);
     on<events.DeletePbrRuleRequested>(_onDeletePbrRule);
+    on<events.PbrRuleUpserted>(_onPbrRuleUpserted); // ثبت کنترل‌کننده جدید
   }
 
   @override
@@ -55,6 +56,32 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       debugPrint('[LoadBalancingBloc] $message');
     }
   }
+  
+  // متد جدید برای آپدیت خوشبینانه لیست رول‌ها
+  void _onPbrRuleUpserted(
+    events.PbrRuleUpserted event,
+    Emitter<LoadBalancingState> emit,
+  ) {
+    final newRule = event.rule;
+    final currentRules = List<RouteMap>.from(state.pbrRouteMaps);
+
+    final index = currentRules.indexWhere((rule) => rule.name == newRule.name);
+
+    if (index != -1) {
+      // ویرایش: رول قبلی را با رول جدید جایگزین کن
+      currentRules[index] = newRule;
+      _logDebug('Optimistically updated rule: ${newRule.name}');
+    } else {
+      // افزودن: رول جدید را به لیست اضافه کن
+      currentRules.add(newRule);
+      _logDebug('Optimistically added rule: ${newRule.name}');
+    }
+    
+    // لیست را بر اساس نام مرتب کن
+    currentRules.sort((a, b) => a.name.compareTo(b.name));
+    emit(state.copyWith(pbrRouteMaps: currentRules));
+  }
+
 
   Future<void> _onFetchPbrConfiguration(
     events.FetchPbrConfigurationRequested event,
@@ -96,8 +123,6 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     if (event.type == LoadBalancingType.pbr && state.pbrStatus == DataStatus.initial) {
       add(events.FetchPbrConfigurationRequested());
     }
-    // **FIX ADDED HERE**
-    // When switching back to ECMP, always refresh the routing table to get the latest gateways.
     else if (event.type == LoadBalancingType.ecmp) {
       add(events.FetchRoutingTableRequested());
     }
@@ -315,7 +340,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
             status: DataStatus.success,
             successMessage: result,
           ));
-        add(events.FetchRoutingTableRequested());
+         add(events.FetchRoutingTableRequested());
       }
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');
@@ -337,13 +362,19 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
         credentials: state.credentials!,
         ruleToDelete: event.ruleToDelete,
       );
-      emit(state.copyWith(status: DataStatus.success, successMessage: result));
-      // Refresh the list after deletion
-      add(events.FetchPbrConfigurationRequested());
+      
+      final updatedRouteMaps = List.of(state.pbrRouteMaps)
+        ..removeWhere((rule) => rule.name == event.ruleToDelete.name);
+      _logDebug('Optimistically removed rule: ${event.ruleToDelete.name}');
+        
+      emit(state.copyWith(
+        status: DataStatus.success, 
+        successMessage: result,
+        pbrRouteMaps: updatedRouteMaps,
+      ));
+
     } catch (e) {
       emit(state.copyWith(status: DataStatus.failure, error: e.toString()));
     }
   }
-
-
 }

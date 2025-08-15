@@ -1,4 +1,5 @@
 // lib/data/datasources/handlers/ssh_handler.dart
+import 'package:dartssh2/dartssh2.dart'; // این import را اضافه کنید
 import 'package:flutter/foundation.dart';
 import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
@@ -16,15 +17,29 @@ class SshHandler implements ConnectionHandler {
       debugPrint('[SSH Handler] $message');
     }
   }
+  
+  // **تغییر ۱: متد _createAndExecute برای کاهش تکرار کد**
+  // این متد یک اتصال جدید ایجاد می‌کند، عملیات را اجرا کرده و اتصال را می‌بندد.
+  Future<T> _createAndExecute<T>(
+    LBDeviceCredentials credentials,
+    Future<T> Function(SSHClient client) operation,
+  ) async {
+    final client = await _executor.createSshClient(credentials);
+    try {
+      return await operation(client);
+    } finally {
+      client.close();
+      _logDebug('SSH client closed for single operation.');
+    }
+  }
 
   @override
   Future<Map<String, String>> fetchInterfaceDataBundle(
     LBDeviceCredentials credentials,
   ) async {
     _logDebug('Preparing interface data bundle commands');
-    final client = await _executor.createSshClient(credentials);
-    try {
-      final commands = [
+    return _createAndExecute(credentials, (client) async {
+       final commands = [
         'terminal length 0',
         'show ip interface brief',
         'show running-config',
@@ -34,35 +49,27 @@ class SshHandler implements ConnectionHandler {
         throw Exception('Failed to get all required outputs for interfaces.');
       }
       return {'brief': results[1], 'detailed': results[2]};
-    } finally {
-      client.close();
-    }
+    });
   }
 
   @override
   Future<String> getRoutingTable(LBDeviceCredentials credentials) async {
     _logDebug('Preparing get routing table command');
-    final client = await _executor.createSshClient(credentials);
-    try {
-      final commands = ['terminal length 0', 'show ip route'];
-      final results = await _executor.execute(credentials, client, commands);
-      return results.last;
-    } finally {
-      client.close();
-    }
+    return _createAndExecute(credentials, (client) async {
+        final commands = ['terminal length 0', 'show ip route'];
+        final results = await _executor.execute(credentials, client, commands);
+        return results.last;
+    });
   }
 
   @override
   Future<String> getRunningConfig(LBDeviceCredentials credentials) async {
     _logDebug('Preparing get running-config command');
-    final client = await _executor.createSshClient(credentials);
-    try {
-      final commands = ['terminal length 0', 'show running-config'];
-      final results = await _executor.execute(credentials, client, commands);
-      return results.last;
-    } finally {
-      client.close();
-    }
+     return _createAndExecute(credentials, (client) async {
+        final commands = ['terminal length 0', 'show running-config'];
+        final results = await _executor.execute(credentials, client, commands);
+        return results.last;
+    });
   }
 
   @override
@@ -71,15 +78,12 @@ class SshHandler implements ConnectionHandler {
     String ipAddress,
   ) async {
     _logDebug('Preparing ping command');
-    final client = await _executor.createSshClient(credentials);
-    try {
-      final commands = ['ping $ipAddress repeat 5'];
-      final results = await _executor.execute(credentials, client, commands);
-      final result = results.isNotEmpty ? results.first : '';
-      return _analyzePingResult(result);
-    } finally {
-      client.close();
-    }
+    return _createAndExecute(credentials, (client) async {
+        final commands = ['ping $ipAddress repeat 5'];
+        final results = await _executor.execute(credentials, client, commands);
+        final result = results.isNotEmpty ? results.first : '';
+        return _analyzePingResult(result);
+    });
   }
 
   @override
@@ -102,18 +106,15 @@ class SshHandler implements ConnectionHandler {
       return 'No ECMP configuration changes were needed.';
     }
 
-    final client = await _executor.createSshClient(credentials);
-    try {
+    return _createAndExecute(credentials, (client) async {
       final results = await _executor.execute(credentials, client, commands);
       final result = results.join('\n');
       if (result.toLowerCase().contains('invalid input') ||
           result.toLowerCase().contains('error')) {
-        return 'Failed to apply ECMP configuration. Router response: $result';
+        return 'Failed to apply ECMP configuration.\nRouter response: $result';
       }
       return 'ECMP configuration applied successfully.';
-    } finally {
-      client.close();
-    }
+    });
   }
 
   @override
@@ -150,7 +151,6 @@ class SshHandler implements ConnectionHandler {
       }
     }
     commands.add('exit');
-
     if (submission.routeMap.appliedToInterface != null) {
       commands.add('interface ${submission.routeMap.appliedToInterface}');
       commands.add('ip policy route-map ${submission.routeMap.name}');
@@ -158,27 +158,25 @@ class SshHandler implements ConnectionHandler {
 
     commands.add('end');
 
-    final client = await _executor.createSshClient(credentials);
-    try {
-      final results = await _executor.execute(credentials, client, commands);
-      final result = results.join('\n');
-      if (result.toLowerCase().contains('invalid input') ||
-          result.toLowerCase().contains('error')) {
-        return 'Failed to apply PBR configuration. Router response: $result';
-      }
-      return 'PBR rule "${submission.routeMap.name}" applied successfully.';
-    } finally {
-      client.close();
-    }
+    return _createAndExecute(credentials, (client) async {
+        final results = await _executor.execute(credentials, client, commands);
+        final result = results.join('\n');
+        if (result.toLowerCase().contains('invalid input') ||
+            result.toLowerCase().contains('error')) {
+          return 'Failed to apply PBR configuration.\nRouter response: $result';
+        }
+        return 'PBR rule "${submission.routeMap.name}" applied successfully.';
+    });
   }
+
   String _analyzePingResult(String output) {
     if (output.contains('!!!!!') ||
         output.contains('Success rate is 100') ||
         output.contains('Success rate is 80')) {
-      return 'Success! Gateway is reachable.';
+      return 'Success!\nGateway is reachable.';
     } else if (output.contains('.....') ||
         output.contains('Success rate is 0')) {
-      return 'Timeout. Gateway is not reachable.';
+      return 'Timeout.\nGateway is not reachable.';
     }
     return 'Ping failed. Check the IP or connection.';
   }
@@ -196,44 +194,45 @@ class SshHandler implements ConnectionHandler {
     return 'access-list $aclId ${entry.permission} ${entry.protocol} $source $destination ${entry.portCondition ?? ''}'
         .trim();
   }
-
+  
+  // **تغییر ۲: این متد اصلی است که برای حل مشکل حذف، بازنویسی شده**
   @override
   Future<String> deletePbrRule({
     required LBDeviceCredentials credentials,
     required RouteMap ruleToDelete,
   }) async {
     _logDebug('Preparing PBR delete commands for rule: ${ruleToDelete.name}');
-    final commands = <String>['configure terminal'];
+    
+    // در اینجا ما یک اتصال ایجاد کرده و آن را باز نگه می‌داریم تا هم
+    // دستورات حذف و هم دستورات بازخوانی بعدی را روی همین اتصال اجرا کنیم.
+    // این کار از طریق RemoteDataSourceImpl مدیریت خواهد شد.
+    return _createAndExecute(credentials, (client) async {
+       final commands = <String>['configure terminal'];
 
-    // 1. Remove policy from interface
-    if (ruleToDelete.appliedToInterface != null) {
-      commands.add('interface ${ruleToDelete.appliedToInterface}');
-      commands.add('no ip policy route-map ${ruleToDelete.name}');
-      commands.add('exit');
-    }
+      // 1. Remove policy from interface
+      if (ruleToDelete.appliedToInterface != null) {
+        commands.add('interface ${ruleToDelete.appliedToInterface}');
+        commands.add('no ip policy route-map ${ruleToDelete.name}');
+        commands.add('exit');
+      }
 
-    // 2. Remove route-map
-    commands.add('no route-map ${ruleToDelete.name}');
+      // 2. Remove route-map
+      commands.add('no route-map ${ruleToDelete.name}');
+      // 3. Remove associated ACL (assuming it's not shared)
+      final aclId = ruleToDelete.entries.first.matchAclId;
+      if (aclId != null) {
+        commands.add('no access-list $aclId');
+      }
 
-    // 3. Remove associated ACL (assuming it's not shared)
-    final aclId = ruleToDelete.entries.first.matchAclId;
-    if (aclId != null) {
-      commands.add('no access-list $aclId');
-    }
+      commands.add('end');
 
-    commands.add('end');
-
-    final client = await _executor.createSshClient(credentials);
-    try {
       final results = await _executor.execute(credentials, client, commands);
       final result = results.join('\n');
       if (result.toLowerCase().contains('invalid input') ||
           result.toLowerCase().contains('error')) {
-        return 'Failed to delete PBR rule. Router response: $result';
+        return 'Failed to delete PBR rule.\nRouter response: $result';
       }
       return 'PBR rule "${ruleToDelete.name}" deleted successfully.';
-    } finally {
-      client.close();
-    }
+    });
   }
 }

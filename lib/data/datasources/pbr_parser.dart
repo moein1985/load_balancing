@@ -3,7 +3,6 @@ import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/route_map.dart';
 
 class PbrParser {
-  // ... (متد parseRouteMaps بدون تغییر) ...
   static List<RouteMap> parseRouteMaps(String config) {
     final routeMaps = <RouteMap>[];
     final routeMapRegex = RegExp(r'^route-map\s+(\S+)\s+(permit|deny)\s+(\d+)', multiLine: true);
@@ -13,7 +12,6 @@ class PbrParser {
 
     final lines = config.split('\n');
     Map<String, List<RouteMapEntry>> allEntries = {};
-
     for (final line in lines) {
       final routeMapMatch = routeMapRegex.firstMatch(line);
       if (routeMapMatch != null) {
@@ -26,12 +24,11 @@ class PbrParser {
         final entryLines = _getBlock(lines, lines.indexOf(line));
         String? aclId;
         RouteMapAction? action;
-        
         for(final entryLine in entryLines) {
            final matchAcl = matchRegex.firstMatch(entryLine);
-            if (matchAcl != null) {
+           if (matchAcl != null) {
                 aclId = matchAcl.group(1)!.trim();
-            }
+           }
 
             final setNextHop = setNextHopRegex.firstMatch(entryLine);
             if (setNextHop != null) {
@@ -57,20 +54,18 @@ class PbrParser {
        entries.sort((a, b) => a.sequence.compareTo(b.sequence));
        routeMaps.add(RouteMap(name: name, entries: entries));
     });
-
     return routeMaps;
   }
   
-  // **این متد برای پشتیبانی از هر دو نوع ACL بهبود داده شد**
   static List<AccessControlList> parseAccessLists(String config) {
     final accessLists = <AccessControlList>[];
     // Regex for Extended ACLs (protocol, src, dst, port)
     final extendedAclRegex = RegExp(r'^access-list\s+(\S+)\s+(permit|deny)\s+(\S+)\s+(host\s+\S+|\S+\s+\S+|any)\s+(host\s+\S+|\S+\s+\S+|any)(.*)');
-    // Regex for Standard ACLs (just src)
-    final standardAclRegex = RegExp(r'^access-list\s+(\d{1,2})\s+(permit|deny)\s+(host\s+\S+|\S+\s+\S+|any)');
+    
+    // Regex for Standard ACLs updated to only match numbers 1-99.
+    final standardAclRegex = RegExp(r'^access-list\s+([1-9]\d?)\s+(permit|deny)\s+(host\s+\S+|\S+\s+\S+|any)');
 
     final Map<String, List<AclEntry>> allEntries = {};
-
     for (final line in config.split('\n')) {
       final trimmedLine = line.trim();
       final extendedMatch = extendedAclRegex.firstMatch(trimmedLine);
@@ -78,19 +73,25 @@ class PbrParser {
 
       if (extendedMatch != null) {
         final id = extendedMatch.group(1)!;
-        final portCondition = extendedMatch.group(6)?.trim();
-
-        final entry = AclEntry(
-          sequence: allEntries[id]?.length ?? 0,
-          permission: extendedMatch.group(2)!,
-          protocol: extendedMatch.group(3)!,
-          source: extendedMatch.group(4)!,
-          destination: extendedMatch.group(5)!,
-          portCondition: portCondition?.isNotEmpty == true ? portCondition : null,
-        );
-        allEntries.putIfAbsent(id, () => []).add(entry);
-
-      } else if (standardMatch != null) {
+        // This is a simple fix to avoid standard ACLs being parsed as extended.
+        if (int.tryParse(id) != null && int.parse(id) < 100 && extendedMatch.group(3) == 'host') {
+            // Likely a mis-parsed standard ACL, let standard parser handle it.
+        } else {
+            final portCondition = extendedMatch.group(6)?.trim();
+            final entry = AclEntry(
+              sequence: allEntries[id]?.length ?? 0,
+              permission: extendedMatch.group(2)!,
+              protocol: extendedMatch.group(3)!,
+              source: extendedMatch.group(4)!,
+              destination: extendedMatch.group(5)!,
+              portCondition: portCondition?.isNotEmpty == true ? portCondition : null,
+            );
+            allEntries.putIfAbsent(id, () => []).add(entry);
+            continue; // Ensure it's not parsed again
+        }
+      } 
+      
+      if (standardMatch != null) {
         final id = standardMatch.group(1)!;
         final entry = AclEntry(
           sequence: allEntries[id]?.length ?? 0,
@@ -106,12 +107,10 @@ class PbrParser {
     allEntries.forEach((id, entries) {
       accessLists.add(AccessControlList(id: id, entries: entries));
     });
-
     return accessLists;
   }
 
-  // ... (متدهای parseInterfacePolicies و _getBlock بدون تغییر) ...
-    static Map<String, String> parseInterfacePolicies(String config) {
+  static Map<String, String> parseInterfacePolicies(String config) {
     final policies = <String, String>{};
     final lines = config.split('\n');
     String? currentInterface;

@@ -5,108 +5,118 @@ import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/route_map.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 
+// **تغییر ۱: این enum ها به این فایل منتقل شدند**
 enum LoadBalancingType { ecmp, pbr }
 enum DataStatus { initial, loading, success, failure }
 
 class LoadBalancingState extends Equatable {
-  // Holds the credentials to be used for each request
+  // وضعیت کلی صفحه (مثلا برای نمایش اسنک‌بار موفقیت/شکست)
+  final DataStatus status;
+  final String? successMessage;
+  final String error;
+
   final LBDeviceCredentials? credentials;
   final LoadBalancingType type;
-  // General status for operations like applying configs
-  final DataStatus status;
-  final String error;
-  // Specific message for successful operations
-  final String? successMessage;
 
-  final List<RouterInterface> interfaces;
+  // وضعیت و داده‌های مربوط به Interfaces
   final DataStatus interfacesStatus;
-  
-  // This new property holds the list of ECMP gateways read from the router.
-  final List<String> initialEcmpGateways;
+  final List<RouterInterface> interfaces;
 
-  final String? routingTable;
+  // وضعیت و داده‌های مربوط به Routing Table و ECMP
   final DataStatus routingTableStatus;
-
+  final String? routingTable;
+  final List<String> initialEcmpGateways;
   final Map<String, String> pingResults;
   final DataStatus pingStatus;
-  final String? pingingIp;
-
-  // **فیلدهای جدید برای مدیریت PBR**
-  final List<RouteMap> pbrRouteMaps;
-  final List<AccessControlList> pbrAccessLists;
+  final String pingingIp;
+  
+  // وضعیت و داده‌های مربوط به PBR
   final DataStatus pbrStatus;
   final String pbrError;
+  final List<RouteMap> pbrRouteMaps;
+  final List<AccessControlList> pbrAccessLists;
+
 
   const LoadBalancingState({
+    this.status = DataStatus.initial,
+    this.successMessage,
+    this.error = '',
     this.credentials,
     this.type = LoadBalancingType.ecmp,
-    this.status = DataStatus.initial,
-    this.error = '',
-    this.successMessage,
-    this.interfaces = const [],
     this.interfacesStatus = DataStatus.initial,
-    this.initialEcmpGateways = const [], 
-    this.routingTable,
+    this.interfaces = const [],
     this.routingTableStatus = DataStatus.initial,
+    this.routingTable,
+    this.initialEcmpGateways = const [],
     this.pingResults = const {},
     this.pingStatus = DataStatus.initial,
-    this.pingingIp,
-    // **مقداردهی اولیه فیلدهای جدید**
-    this.pbrRouteMaps = const [],
-    this.pbrAccessLists = const [],
+    this.pingingIp = '',
     this.pbrStatus = DataStatus.initial,
     this.pbrError = '',
+    this.pbrRouteMaps = const [],
+    this.pbrAccessLists = const [],
   });
 
   LoadBalancingState copyWith({
-    LBDeviceCredentials? credentials,
-    LoadBalancingType? type,
     DataStatus? status,
-    String? error,
     String? successMessage,
     bool clearSuccessMessage = false,
-    List<RouterInterface>? interfaces,
+    String? error,
+    LBDeviceCredentials? credentials,
+    LoadBalancingType? type,
     DataStatus? interfacesStatus,
-    List<String>? initialEcmpGateways,
+    List<RouterInterface>? interfaces,
+    DataStatus? routingTableStatus,
     String? routingTable,
     bool clearRoutingTable = false,
-    DataStatus? routingTableStatus,
+    List<String>? initialEcmpGateways,
     Map<String, String>? pingResults,
     DataStatus? pingStatus,
     String? pingingIp,
-    // **اضافه شدن به copyWith**
-    List<RouteMap>? pbrRouteMaps,
-    List<AccessControlList>? pbrAccessLists,
     DataStatus? pbrStatus,
     String? pbrError,
+    List<RouteMap>? pbrRouteMaps,
+    List<AccessControlList>? pbrAccessLists,
   }) {
     return LoadBalancingState(
+      status: status ?? this.status,
+      successMessage: clearSuccessMessage ? null : successMessage ?? this.successMessage,
+      error: error ?? this.error,
       credentials: credentials ?? this.credentials,
       type: type ?? this.type,
-      status: status ?? this.status,
-      error: (status != null && status != DataStatus.failure) ? '' : error ?? this.error,
-      successMessage: clearSuccessMessage ? null : successMessage ?? this.successMessage,
-      interfaces: interfaces ?? this.interfaces,
       interfacesStatus: interfacesStatus ?? this.interfacesStatus,
-      initialEcmpGateways: initialEcmpGateways ?? this.initialEcmpGateways,
-      routingTable: clearRoutingTable ? null : routingTable ?? this.routingTable,
+      interfaces: interfaces ?? this.interfaces,
       routingTableStatus: routingTableStatus ?? this.routingTableStatus,
+      routingTable: clearRoutingTable ? null : routingTable ?? this.routingTable,
+      initialEcmpGateways: initialEcmpGateways ?? this.initialEcmpGateways,
       pingResults: pingResults ?? this.pingResults,
       pingStatus: pingStatus ?? this.pingStatus,
       pingingIp: pingingIp ?? this.pingingIp,
-      // **استفاده در copyWith**
+      pbrStatus: pbrStatus ?? this.pbrStatus,
+      pbrError: pbrError ?? this.pbrError,
       pbrRouteMaps: pbrRouteMaps ?? this.pbrRouteMaps,
       pbrAccessLists: pbrAccessLists ?? this.pbrAccessLists,
-      pbrStatus: pbrStatus ?? this.pbrStatus,
-      pbrError: (pbrStatus != null && pbrStatus != DataStatus.failure) ? '' : pbrError ?? this.pbrError,
     );
   }
 
   @override
   List<Object?> get props => [
-        credentials, type, status, error, successMessage, interfaces, interfacesStatus,
-        initialEcmpGateways, routingTable, routingTableStatus, pingResults, pingStatus, pingingIp,
-        // **اضافه شدن به props برای Equatable**
-        pbrRouteMaps, pbrAccessLists, pbrStatus, pbrError,
+        status,
+        successMessage,
+        error,
+        credentials,
+        type,
+        interfacesStatus,
+        interfaces,
+        routingTableStatus,
+        routingTable,
+        initialEcmpGateways,
+        pingResults,
+        pingStatus,
+        pingingIp,
+        pbrStatus,
+        pbrError,
+        pbrRouteMaps,
+        pbrAccessLists,
       ];
 }

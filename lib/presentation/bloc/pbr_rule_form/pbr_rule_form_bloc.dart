@@ -13,7 +13,6 @@ import 'pbr_rule_form_state.dart';
 class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
   final ApplyPbrRule applyPbrRule;
   final LBDeviceCredentials credentials;
-
   PbrRuleFormBloc({required this.applyPbrRule, required this.credentials})
       : super(const PbrRuleFormState()) {
     on<FormLoaded>(_onFormLoaded);
@@ -45,7 +44,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
           existingAcls: event.acls,
           existingRouteMaps: event.routeMaps,
           egressInterface: event.interfaces.isNotEmpty
-              ? event.interfaces.first.name
+               ? event.interfaces.first.name
               : '',
           applyToInterface: event.interfaces.isNotEmpty
               ? event.interfaces.first.name
@@ -57,11 +56,16 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
       final ruleToEdit = event.routeMaps.firstWhere(
         (rm) => rm.name == event.ruleId,
       );
-      final associatedAcl = event.acls.firstWhere(
-        (acl) => acl.id == ruleToEdit.entries.first.matchAclId,
-        // Provide a fallback in case the ACL is missing
-        orElse: () => const AccessControlList(id: 'unknown', entries: []),
-      );
+        
+      AccessControlList? associatedAcl;
+      final aclIdToFind = ruleToEdit.entries.first.matchAclId;
+      if(aclIdToFind != null) {
+        try {
+           associatedAcl = event.acls.firstWhere((acl) => acl.id == aclIdToFind);
+        } catch(e) {
+          // ACL not found, associatedAcl will remain null, which is fine.
+        }
+      }
 
       final action = ruleToEdit.entries.first.action;
       final actionType = action is SetNextHopAction
@@ -71,7 +75,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
       final egressInterface = action is SetInterfaceAction
           ? action.interfaces.first
           : (event.interfaces.isNotEmpty ? event.interfaces.first.name : '');
-
+      
       emit(
         state.copyWith(
           availableInterfaces: event.interfaces,
@@ -79,7 +83,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
           existingRouteMaps: event.routeMaps,
           ruleName: ruleToEdit.name,
           aclMode: AclSelectionMode.selectExisting,
-          selectedAclId: associatedAcl.id,
+          selectedAclId: associatedAcl?.id,
           actionType: actionType,
           nextHop: nextHop,
           egressInterface: egressInterface,
@@ -161,7 +165,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     String? error;
     if (name.isEmpty) {
       error = 'Rule name cannot be empty.';
-    } else if (state.existingRouteMaps.any((rm) => rm.name == name)) {
+    } else if (state.existingRouteMaps.any((rm) => rm.name == name && state.ruleName != name)) {
       error = 'This rule name already exists.';
     }
     emit(state.copyWith(ruleName: name, ruleNameError: error));
@@ -201,7 +205,6 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     
     AccessControlList? newAcl;
     String aclIdToMatch;
-
     if (state.aclMode == AclSelectionMode.createNew) {
       aclIdToMatch = state.newAclId;
       newAcl = AccessControlList(
@@ -215,9 +218,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     final action = state.actionType == PbrActionType.nextHop
         ? SetNextHopAction([state.nextHop])
         : SetInterfaceAction([state.egressInterface]);
-    
-    // **FIX APPLIED HERE:**
-    // The `appliedToInterface` now correctly uses the value from the form state.
+
     final routeMap = RouteMap(
       name: state.ruleName,
       appliedToInterface: state.applyToInterface,
@@ -230,7 +231,6 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
         ),
       ],
     );
-
     final submission = PbrSubmission(routeMap: routeMap, newAcl: newAcl);
 
     try {
@@ -239,7 +239,11 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
         submission: submission,
       );
       emit(
-        state.copyWith(formStatus: DataStatus.success, successMessage: result),
+        state.copyWith(
+          formStatus: DataStatus.success, 
+          successMessage: result,
+          submittedRule: routeMap, // رول ساخته/ویرایش شده را به state اضافه کن
+        ),
       );
     } catch (e) {
       emit(

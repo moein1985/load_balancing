@@ -11,7 +11,6 @@ import '../../domain/entities/route_map.dart';
 
 class DeviceRepositoryImpl implements RouterRepository {
   final RemoteDataSource remoteDataSource;
-
   DeviceRepositoryImpl({required this.remoteDataSource});
 
   @override
@@ -56,16 +55,24 @@ class DeviceRepositoryImpl implements RouterRepository {
     }
   }
 
-  /// **متد پیاده‌سازی شده جدید**
+  // **تغییر اصلی در اینجا برای حل مشکل Retry**
   @override
   Future<String> getRunningConfig(LBDeviceCredentials credentials) async {
-    try {
-      return await remoteDataSource.fetchRunningConfig(credentials);
-    } on ServerFailure catch (e) {
-      // Re-throw to be handled by the BLoC
-      throw ServerFailure(e.message);
-    } catch (e) {
-      throw ServerFailure(e.toString());
+    int retries = 1; // 1 تلاش مجدد (مجموعاً ۲ بار)
+    while (true) {
+      try {
+        return await remoteDataSource.fetchRunningConfig(credentials);
+      } on ServerFailure catch (e) {
+        // فقط برای خطاهای خاص اتصال، دوباره تلاش کن
+        if (e.message.toLowerCase().contains('connection closed') && retries > 0) {
+          retries--;
+          await Future.delayed(const Duration(milliseconds: 500)); // یک وقفه کوتاه
+        } else {
+          throw ServerFailure(e.message); // در غیر این صورت، خطا را برگردان
+        }
+      } catch (e) {
+        throw ServerFailure(e.toString());
+      }
     }
   }
 

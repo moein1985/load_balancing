@@ -9,17 +9,16 @@ import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_eve
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 import 'package:load_balance/presentation/screens/load_balancing/widgets/ecmp_form.dart';
 import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_form.dart';
+import 'package:load_balance/domain/entities/route_map.dart'; // این import را اضافه کنید
 
 class LoadBalancingScreen extends StatefulWidget {
   final LBDeviceCredentials credentials;
   final List<RouterInterface> initialInterfaces;
-
   const LoadBalancingScreen({
     super.key,
     required this.credentials,
     required this.initialInterfaces,
   });
-
   @override
   State<LoadBalancingScreen> createState() => _LoadBalancingScreenState();
 }
@@ -43,10 +42,18 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
         builder: (context, state) {
           if (state.type == LoadBalancingType.pbr) {
             return FloatingActionButton.extended(
-              onPressed: () {
+              onPressed: () async { // متد را async کنید
                 final credentials = context.read<LoadBalancingBloc>().state.credentials;
                 if (credentials != null) {
-                  context.pushNamed('add_pbr_rule', extra: credentials);
+                  // منتظر نتیجه بازگشتی از صفحه ساخت رول باشید
+                  final result = await context.pushNamed<RouteMap?>(
+                    'add_pbr_rule', 
+                    extra: credentials
+                  );
+                  // اگر رولی بازگردانده شد، رویداد آپدیت را ارسال کنید
+                  if (result != null && context.mounted) {
+                    context.read<LoadBalancingBloc>().add(PbrRuleUpserted(result));
+                  }
                 }
               },
               label: const Text('Add New Rule'),
@@ -80,7 +87,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
           }
         },
         child: SingleChildScrollView(
-          // **اصلاح اصلی:** اضافه کردن padding به پایین صفحه برای جلوگیری از همپوشانی با دکمه شناور
           padding: const EdgeInsets.fromLTRB(24.0, 24.0, 24.0, 90.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -100,7 +106,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                         label: Text('ECMP'),
                         icon: Icon(Icons.alt_route),
                       ),
-                      ButtonSegment<LoadBalancingType>(
+                       ButtonSegment<LoadBalancingType>(
                         value: LoadBalancingType.pbr,
                         label: Text('PBR'),
                         icon: Icon(Icons.rule),
@@ -135,7 +141,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   }
 }
 
-// ... (ویجت _RouterInfoSection بدون تغییر باقی می‌ماند) ...
+// ویجت _RouterInfoSection بدون تغییر باقی می‌ماند
 class _RouterInfoSection extends StatelessWidget {
   const _RouterInfoSection();
   @override
@@ -180,7 +186,7 @@ class _RouterInfoSection extends StatelessWidget {
                 style: const TextStyle(color: Colors.red),
               ),
             )
-          else if (state.interfaces.isEmpty)
+           else if (state.interfaces.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16.0),
               child: Text('No active interfaces found or connection failed.'),

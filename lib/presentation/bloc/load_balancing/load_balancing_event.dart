@@ -17,7 +17,6 @@ class ScreenStarted extends LoadBalancingEvent {
   final List<RouterInterface> interfaces;
 
   const ScreenStarted(this.credentials, this.interfaces);
-
   @override
   List<Object?> get props => [credentials, interfaces];
 }
@@ -70,4 +69,12 @@ class DeletePbrRuleRequested extends LoadBalancingEvent {
   const DeletePbrRuleRequested(this.ruleToDelete);
   @override
   List<Object> get props => [ruleToDelete];
+}
+
+// Event for optimistic UI update after a rule is created/edited.
+class PbrRuleUpserted extends LoadBalancingEvent {
+  final RouteMap rule;
+  const PbrRuleUpserted(this.rule);
+  @override
+  List<Object> get props => [rule];
 }

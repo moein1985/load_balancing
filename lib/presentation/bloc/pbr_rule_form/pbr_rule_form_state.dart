@@ -13,6 +13,9 @@ class PbrRuleFormState extends Equatable {
   final DataStatus formStatus;
   final String? errorMessage;
   final String? successMessage;
+  
+  // Holds the successfully submitted rule to be passed back.
+  final RouteMap? submittedRule;
 
   // داده‌های اولیه که از صفحه قبل می‌آیند
   final List<RouterInterface> availableInterfaces;
@@ -41,6 +44,7 @@ class PbrRuleFormState extends Equatable {
     this.formStatus = DataStatus.initial,
     this.errorMessage,
     this.successMessage,
+    this.submittedRule,
     this.availableInterfaces = const [],
     this.existingAcls = const [],
     this.existingRouteMaps = const [],
@@ -60,12 +64,10 @@ class PbrRuleFormState extends Equatable {
     this.egressInterface = '',
     this.applyToInterface = '',
   });
-
   /// A getter to determine if the form is valid and can be submitted.
   bool get isFormValid {
     if (ruleName.trim().isEmpty) return false;
     if(ruleNameError != null) return false;
-
     if (aclMode == AclSelectionMode.createNew) {
       if (newAclId.trim().isEmpty || newAclIdError != null) return false;
       if (newAclEntries.isEmpty) return false;
@@ -86,6 +88,7 @@ class PbrRuleFormState extends Equatable {
     DataStatus? formStatus,
     String? errorMessage,
     String? successMessage,
+    RouteMap? submittedRule,
     List<RouterInterface>? availableInterfaces,
     List<AccessControlList>? existingAcls,
     List<RouteMap>? existingRouteMaps,
@@ -107,6 +110,7 @@ class PbrRuleFormState extends Equatable {
       formStatus: formStatus ?? this.formStatus,
       errorMessage: errorMessage,
       successMessage: successMessage,
+      submittedRule: submittedRule ?? this.submittedRule,
       availableInterfaces: availableInterfaces ?? this.availableInterfaces,
       existingAcls: existingAcls ?? this.existingAcls,
       existingRouteMaps: existingRouteMaps ?? this.existingRouteMaps,
@@ -127,7 +131,7 @@ class PbrRuleFormState extends Equatable {
 
   @override
   List<Object?> get props => [
-        formStatus, errorMessage, successMessage, availableInterfaces, existingAcls, existingRouteMaps,
+        formStatus, errorMessage, successMessage, submittedRule, availableInterfaces, existingAcls, existingRouteMaps,
         aclMode, selectedAclId, newAclId, newAclIdError, newAclEntries, ruleName, ruleNameError,
         actionType, nextHop, nextHopError, egressInterface, applyToInterface
       ];
