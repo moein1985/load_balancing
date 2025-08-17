@@ -58,18 +58,29 @@ class PbrRuleCard extends StatelessWidget {
                         .state
                         .credentials;
                     if (credentials != null) {
-                      final result = await context.pushNamed<RouteMap?>(
-                        'edit_pbr_rule',
-                        pathParameters: {'ruleId': routeMap.name},
-                        extra: credentials,
-                      );
+                      final result = await context
+                          .pushNamed<
+                            ({RouteMap newRule, AccessControlList? newAcl})?
+                          >(
+                            'edit_pbr_rule',
+                            pathParameters: {'ruleId': routeMap.name},
+                            extra: credentials,
+                          );
+
                       if (result != null && context.mounted) {
-                        // هم رول جدید و هم نام اصلی رول قدیمی را پاس می‌دهیم
+                        // **تغییر اصلی:**
+                        // 1. ابتدا برای سرعت، یک آپدیت خوشبینانه انجام می‌دهیم.
                         context.read<LoadBalancingBloc>().add(
                           PbrRuleUpserted(
-                            newRule: result,
+                            newRule: result.newRule,
+                            newAcl: result.newAcl,
                             oldRuleName: routeMap.name,
                           ),
+                        );
+                        // 2. سپس، برای تضمین هماهنگی کامل داده‌ها، یک درخواست بازخوانی کامل از روتر ارسال می‌کنیم.
+                        // این کار مشکل ACL not found را به طور قطعی حل می‌کند.
+                        context.read<LoadBalancingBloc>().add(
+                          FetchPbrConfigurationRequested(),
                         );
                       }
                     }

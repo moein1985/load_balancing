@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:load_balance/domain/entities/access_control_list.dart'; // ایمپورت جدید
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
@@ -47,16 +48,18 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                     .state
                     .credentials;
                 if (credentials != null) {
-                  final result = await context.pushNamed<RouteMap?>(
-                    'add_pbr_rule',
-                    extra: credentials,
-                  );
+                  // **تغییر اصلی ۱: تعریف نوع بازگشتی به صورت یک Record**
+                  final result = await context
+                      .pushNamed<
+                        ({RouteMap newRule, AccessControlList? newAcl})?
+                      >('add_pbr_rule', extra: credentials);
                   if (result != null && context.mounted) {
-                    // رویداد را به درستی برای یک رول جدید ایجاد می‌کنیم
+                    // **تغییر اصلی ۲: ارسال هر دو آبجکت به رویداد BLoC**
                     context.read<LoadBalancingBloc>().add(
                       PbrRuleUpserted(
-                        newRule: result,
-                      ), // در اینجا به oldRuleName نیازی نیست
+                        newRule: result.newRule,
+                        newAcl: result.newAcl, // ACL جدید را هم پاس می‌دهیم
+                      ),
                     );
                   }
                 }

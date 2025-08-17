@@ -1,10 +1,10 @@
 // lib/presentation/bloc/load_balancing/load_balancing_event.dart
 import 'package:equatable/equatable.dart';
+import 'package:load_balance/domain/entities/access_control_list.dart'; // **ایمپورت جدید**
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 import '../../../domain/entities/route_map.dart';
-
 abstract class LoadBalancingEvent extends Equatable {
   const LoadBalancingEvent();
   @override
@@ -64,11 +64,14 @@ class DeletePbrRuleRequested extends LoadBalancingEvent {
 // رویداد برای آپدیت خوشبینانه UI پس از ساخت/ویرایش یک رول.
 class PbrRuleUpserted extends LoadBalancingEvent {
   final RouteMap newRule;
+  // **تغییر ۱: فیلد جدید برای حمل ACL**
+  final AccessControlList? newAcl; 
   // نام اصلی رول برای مدیریت تغییر نام در هنگام ویرایش اضافه شده است.
   final String? oldRuleName;
 
-  const PbrRuleUpserted({required this.newRule, this.oldRuleName});
+  const PbrRuleUpserted({required this.newRule, this.newAcl, this.oldRuleName});
 
   @override
-  List<Object?> get props => [newRule, oldRuleName];
+  // **تغییر ۲: اضافه شدن فیلد جدید به props**
+  List<Object?> get props => [newRule, newAcl, oldRuleName];
 }

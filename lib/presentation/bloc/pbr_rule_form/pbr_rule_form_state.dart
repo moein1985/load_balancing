@@ -17,18 +17,19 @@ class PbrRuleFormState extends Equatable {
   final DataStatus formStatus;
   final String? errorMessage;
   final String? successMessage;
-
   // Holds the successfully submitted rule to be passed back.
   final RouteMap? submittedRule;
+  // **تغییر ۱: این فیلد برای نگهداری ACL جدید اضافه شده است**
+  final AccessControlList? submittedAcl; 
 
   // داده‌های اولیه که از صفحه قبل می‌آیند
   final List<RouterInterface> availableInterfaces;
   final List<AccessControlList> existingAcls;
   final List<RouteMap> existingRouteMaps;
-
   // -- بخش انتخاب Access-List --
   final AclSelectionMode aclMode;
-  final String? selectedAclId; // ID ی ACL انتخاب شده از لیست موجود
+  final String? selectedAclId;
+  // ID ی ACL انتخاب شده از لیست موجود
 
   // -- بخش ساخت Access-List جدید --
   final String newAclId;
@@ -36,7 +37,8 @@ class PbrRuleFormState extends Equatable {
   final List<AclEntry> newAclEntries; // لیست موقت برای ساخت ACL جدید
 
   // -- بخش Route-Map --
-  final String ruleName; // نام Route-Map
+  final String ruleName;
+  // نام Route-Map
   final String? ruleNameError;
   final PbrActionType actionType;
   final String nextHop;
@@ -51,6 +53,7 @@ class PbrRuleFormState extends Equatable {
     this.errorMessage,
     this.successMessage,
     this.submittedRule,
+    this.submittedAcl, // **تغییر ۲: مقداردهی اولیه در کانستراکتور**
     this.availableInterfaces = const [],
     this.existingAcls = const [],
     this.existingRouteMaps = const [],
@@ -76,7 +79,6 @@ class PbrRuleFormState extends Equatable {
     this.egressInterface = '',
     this.applyToInterface = '',
   });
-
   /// A getter to determine if the form is valid and can be submitted.
   bool get isFormValid {
     if (ruleName.trim().isEmpty) return false;
@@ -106,6 +108,7 @@ class PbrRuleFormState extends Equatable {
     String? errorMessage,
     String? successMessage,
     RouteMap? submittedRule,
+    AccessControlList? submittedAcl, // **تغییر ۳: پارامتر جدید به copyWith اضافه شد**
     List<RouterInterface>? availableInterfaces,
     List<AccessControlList>? existingAcls,
     List<RouteMap>? existingRouteMaps,
@@ -130,6 +133,7 @@ class PbrRuleFormState extends Equatable {
       errorMessage: errorMessage,
       successMessage: successMessage,
       submittedRule: submittedRule ?? this.submittedRule,
+      submittedAcl: submittedAcl ?? this.submittedAcl, // **تغییر ۴: مقداردهی فیلد جدید**
       availableInterfaces: availableInterfaces ?? this.availableInterfaces,
       existingAcls: existingAcls ?? this.existingAcls,
       existingRouteMaps: existingRouteMaps ?? this.existingRouteMaps,
@@ -156,6 +160,7 @@ class PbrRuleFormState extends Equatable {
     errorMessage,
     successMessage,
     submittedRule,
+    submittedAcl, // **تغییر ۵: اضافه شدن به props برای مقایسه صحیح state**
     availableInterfaces,
     existingAcls,
     existingRouteMaps,

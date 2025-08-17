@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/core/error/failure.dart';
+import 'package:load_balance/domain/entities/access_control_list.dart'; // **ایمپورت جدید**
 import 'package:load_balance/domain/entities/route_map.dart';
 import 'package:load_balance/domain/usecases/apply_ecmp_config.dart';
 import 'package:load_balance/domain/usecases/get_pbr_configuration.dart';
@@ -22,7 +23,6 @@ class LoadBalancingBloc
   final GetPbrConfiguration getPbrConfiguration;
   final DeletePbrRule deletePbrRule;
   final Map<String, Timer> _pingTimers = {};
-
   LoadBalancingBloc({
     required this.getInterfaces,
     required this.getRoutingTable,
@@ -58,12 +58,26 @@ class LoadBalancingBloc
     }
   }
 
+  // **تغییر اصلی در این متد است**
   void _onPbrRuleUpserted(
     events.PbrRuleUpserted event,
     Emitter<LoadBalancingState> emit,
   ) {
     final newRule = event.newRule;
     final currentRules = List<RouteMap>.from(state.pbrRouteMaps);
+    final currentAcls = List<AccessControlList>.from(
+      state.pbrAccessLists,
+    ); // کپی کردن لیست ACLها
+
+    // اگر یک ACL جدید ایجاد شده باشد، آن را به لیست داخلی اضافه می‌کنیم
+    if (event.newAcl != null) {
+      // برای جلوگیری از اضافه شدن تکراری، ابتدا چک می‌کنیم
+      final aclExists = currentAcls.any((acl) => acl.id == event.newAcl!.id);
+      if (!aclExists) {
+        currentAcls.add(event.newAcl!);
+        _logDebug('Optimistically added ACL: ${event.newAcl!.id}');
+      }
+    }
 
     final nameToFind = event.oldRuleName ?? newRule.name;
     final index = currentRules.indexWhere((rule) => rule.name == nameToFind);
@@ -79,7 +93,10 @@ class LoadBalancingBloc
     }
 
     currentRules.sort((a, b) => a.name.compareTo(b.name));
-    emit(state.copyWith(pbrRouteMaps: currentRules));
+    // state جدید را با هر دو لیست آپدیت شده، emit می‌کنیم
+    emit(
+      state.copyWith(pbrRouteMaps: currentRules, pbrAccessLists: currentAcls),
+    );
   }
 
   Future<void> _onFetchPbrConfiguration(
@@ -238,7 +255,6 @@ class LoadBalancingBloc
       _logDebug(
         'Routing table received, ${gateways.length} ECMP gateways found.',
       );
-
       emit(
         state.copyWith(
           routingTable: table,
@@ -386,11 +402,9 @@ class LoadBalancingBloc
         credentials: state.credentials!,
         ruleToDelete: event.ruleToDelete,
       );
-
       final updatedRouteMaps = List.of(state.pbrRouteMaps)
         ..removeWhere((rule) => rule.name == event.ruleToDelete.name);
       _logDebug('Optimistically removed rule: ${event.ruleToDelete.name}');
-
       emit(
         state.copyWith(
           status: DataStatus.success,
