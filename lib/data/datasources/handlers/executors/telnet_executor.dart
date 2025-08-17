@@ -16,7 +16,9 @@ class TelnetExecutor {
   }
 
   Future<String> execute(
-      LBDeviceCredentials credentials, List<String> commands) async {
+    LBDeviceCredentials credentials,
+    List<String> commands,
+  ) async {
     _logDebug('Starting execution of Telnet commands');
     final completer = Completer<String>();
     final outputBuffer = StringBuffer();
@@ -27,18 +29,21 @@ class TelnetExecutor {
     int commandIndex = 0;
     final allCommands = ['terminal length 0', ...commands];
     Timer? timeoutTimer;
-    
+
     timeoutTimer = Timer(_commandTimeout, () {
       _logDebug('Telnet operation timed out');
       if (!completer.isCompleted) {
         client?.disconnect();
-        completer.completeError(const ServerFailure("Telnet operation timed out."));
+        completer.completeError(
+          const ServerFailure("Telnet operation timed out."),
+        );
       }
     });
 
+    // **MODIFIED: Use the port from credentials instead of hardcoded 23**
     client = CTelnetClient(
       host: credentials.ip,
-      port: 23,
+      port: credentials.port,
       timeout: _connectionTimeout,
       onConnect: () {
         _logDebug('Telnet connection established');
@@ -48,7 +53,7 @@ class TelnetExecutor {
         timeoutTimer?.cancel();
         if (!completer.isCompleted) {
           completer.complete(outputBuffer.toString());
-         }
+        }
         subscription?.cancel();
       },
       onError: (error) {
@@ -61,6 +66,7 @@ class TelnetExecutor {
       },
     );
 
+    // ... rest of the file remains unchanged ...
     void executeNextCommand() {
       if (commandIndex < allCommands.length) {
         final cmd = allCommands[commandIndex];
@@ -86,13 +92,13 @@ class TelnetExecutor {
           case 'login':
             if (receivedText.toLowerCase().contains('username')) {
               client?.send('${credentials.username}\n');
-             } else if (receivedText.toLowerCase().contains('password')) {
+            } else if (receivedText.toLowerCase().contains('password')) {
               client?.send('${credentials.password}\n');
             } else if (receivedText.endsWith('>')) {
               state = 'enable';
               client?.send('enable\n');
             } else if (receivedText.endsWith('#')) {
-               state = 'executing';
+              state = 'executing';
               outputBuffer.clear();
               executeNextCommand();
             }
@@ -131,9 +137,11 @@ class TelnetExecutor {
 
     return completer.future;
   }
-  
+
   Future<String> executePing(
-      LBDeviceCredentials credentials, String ipAddress) async {
+    LBDeviceCredentials credentials,
+    String ipAddress,
+  ) async {
     _logDebug('Starting Telnet ping for IP: $ipAddress');
     final completer = Completer<String>();
     CTelnetClient? client;
@@ -151,9 +159,10 @@ class TelnetExecutor {
       }
     });
 
+    // **MODIFIED: Use the port from credentials instead of hardcoded 23**
     client = CTelnetClient(
       host: credentials.ip,
-      port: 23,
+      port: credentials.port,
       timeout: _connectionTimeout,
       onConnect: () => _logDebug('Telnet ping connection established'),
       onDisconnect: () {
@@ -174,13 +183,15 @@ class TelnetExecutor {
       },
     );
 
+    // ... rest of the ping logic remains unchanged ...
     try {
       subscription = (await client.connect())?.listen((data) {
         final receivedText = data.text;
         outputBuffer.write(receivedText);
         _logDebug("Ping Received: ${receivedText.replaceAll('\r\n', ' ')}");
 
-        if (receivedText.contains('!!!!!') || receivedText.contains('Success rate is')) {
+        if (receivedText.contains('!!!!!') ||
+            receivedText.contains('Success rate is')) {
           if (!completer.isCompleted) {
             timeoutTimer?.cancel();
             completer.complete(outputBuffer.toString());

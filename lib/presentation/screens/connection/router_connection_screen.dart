@@ -1,5 +1,6 @@
-// presentation/screens/connection/router_connection_screen.dart
+// lib/presentation/screens/connection/router_connection_screen.dart
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:load_balance/presentation/bloc/router_connection/router_connection_bloc.dart';
@@ -17,6 +18,7 @@ class RouterConnectionScreen extends StatefulWidget {
 class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _ipController = TextEditingController();
+  final _portController = TextEditingController(); // **NEW: Port controller**
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _enablePasswordController = TextEditingController();
@@ -27,6 +29,7 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
   @override
   void dispose() {
     _ipController.dispose();
+    _portController.dispose(); // **NEW: Dispose port controller**
     _usernameController.dispose();
     _passwordController.dispose();
     _enablePasswordController.dispose();
@@ -36,23 +39,22 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
   void _checkCredentials() {
     if (_formKey.currentState!.validate()) {
       context.read<RouterConnectionBloc>().add(
-            CheckCredentialsRequested(
-              ip: _ipController.text,
-              username: _usernameController.text,
-              password: _passwordController.text,
-              enablePassword: _enablePasswordController.text,
-              type: _selectedType,
-            ),
-          );
+        CheckCredentialsRequested(
+          ip: _ipController.text,
+          port: _portController.text, // **NEW: Pass port value**
+          username: _usernameController.text,
+          password: _passwordController.text,
+          enablePassword: _enablePasswordController.text,
+          type: _selectedType,
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Router Connection'),
-      ),
+      appBar: AppBar(title: const Text('Router Connection')),
       body: BlocListener<RouterConnectionBloc, RouterConnectionState>(
         listener: (context, state) {
           if (state is ConnectionSuccess) {
@@ -64,14 +66,13 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
                   backgroundColor: Colors.green,
                 ),
               );
-
-            // ***تغییر اصلی***
-            // به جای ارسال یک آبجکت، یک Map شامل تمام داده‌های لازم را ارسال می‌کنیم
-            context.go('/config', extra: {
-              'credentials': state.credentials,
-              'interfaces': state.interfaces,
-            });
-
+            context.go(
+              '/config',
+              extra: {
+                'credentials': state.credentials,
+                'interfaces': state.interfaces,
+              },
+            );
           } else if (state is ConnectionFailure) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
@@ -98,19 +99,55 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 32),
-                  TextFormField(
-                    controller: _ipController,
-                    decoration: const InputDecoration(
-                      labelText: 'IP Address',
-                      prefixIcon: Icon(Icons.router),
-                    ),
-                    keyboardType: TextInputType.number,
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter an IP address';
-                      }
-                      return null;
-                    },
+                  // **MODIFIED: Row for IP and Port**
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextFormField(
+                          controller: _ipController,
+                          decoration: const InputDecoration(
+                            labelText: 'IP Address',
+                            prefixIcon: Icon(Icons.router),
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return 'Please enter an IP';
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        flex: 2,
+                        child: TextFormField(
+                          controller: _portController,
+                          decoration: const InputDecoration(
+                            labelText: 'Port',
+                            hintText: 'e.g., 22',
+                          ),
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          validator: (value) {
+                            if (value == null || value.isEmpty) {
+                              return null; // Optional field
+                            }
+                            final port = int.tryParse(value);
+                            if (port == null || port < 1 || port > 65535) {
+                              return 'Invalid';
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
@@ -134,11 +171,14 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock_outline),
                       suffixIcon: IconButton(
-                        icon: Icon(_isPasswordVisible
-                            ? Icons.visibility_off
-                            : Icons.visibility),
+                        icon: Icon(
+                          _isPasswordVisible
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
                         onPressed: () => setState(
-                            () => _isPasswordVisible = !_isPasswordVisible),
+                          () => _isPasswordVisible = !_isPasswordVisible,
+                        ),
                       ),
                     ),
                     validator: (value) {
@@ -156,12 +196,15 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
                       labelText: 'Enable Password (optional)',
                       prefixIcon: const Icon(Icons.lock),
                       suffixIcon: IconButton(
-                        icon: Icon(_isEnablePasswordVisible
-                            ? Icons.visibility_off
-                            : Icons.visibility),
-                        onPressed: () => setState(() =>
-                            _isEnablePasswordVisible =
-                                !_isEnablePasswordVisible),
+                        icon: Icon(
+                          _isEnablePasswordVisible
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                        onPressed: () => setState(
+                          () => _isEnablePasswordVisible =
+                              !_isEnablePasswordVisible,
+                        ),
                       ),
                     ),
                   ),
@@ -169,13 +212,15 @@ class _RouterConnectionScreenState extends State<RouterConnectionScreen> {
                   SegmentedButton<ConnectionType>(
                     segments: const <ButtonSegment<ConnectionType>>[
                       ButtonSegment<ConnectionType>(
-                          value: ConnectionType.ssh,
-                          label: Text('SSHv2'),
-                          icon: Icon(Icons.security)),
+                        value: ConnectionType.ssh,
+                        label: Text('SSHv2'),
+                        icon: Icon(Icons.security),
+                      ),
                       ButtonSegment<ConnectionType>(
-                          value: ConnectionType.telnet,
-                          label: Text('Telnet'),
-                          icon: Icon(Icons.lan)),
+                        value: ConnectionType.telnet,
+                        label: Text('Telnet'),
+                        icon: Icon(Icons.lan),
+                      ),
                     ],
                     selected: {_selectedType},
                     onSelectionChanged: (Set<ConnectionType> newSelection) {

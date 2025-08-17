@@ -1,9 +1,10 @@
-// lib/domain/entities/device_credentials.dart
+// lib/domain/entities/lb_device_credentials.dart
 import 'package:equatable/equatable.dart';
 import 'package:load_balance/presentation/screens/connection/router_connection_screen.dart';
 
 class LBDeviceCredentials extends Equatable {
   final String ip;
+  final int port; // **NEW: Added port field**
   final String username;
   final String password;
   final String? enablePassword;
@@ -13,6 +14,7 @@ class LBDeviceCredentials extends Equatable {
 
   const LBDeviceCredentials({
     required this.ip,
+    required this.port, // **NEW: Added to constructor**
     required this.username,
     required this.password,
     this.enablePassword,
@@ -21,19 +23,18 @@ class LBDeviceCredentials extends Equatable {
     this.commandTimeout = const Duration(seconds: 20),
   });
 
-  // Data validation
+  // Data validation remains the same
   bool get isValid {
+    // ... no changes needed here
     if (ip.trim().isEmpty || username.trim().isEmpty || password.trim().isEmpty) {
       return false;
     }
     
-    // IP format check
     final ipRegex = RegExp(r'^(\d{1,3}\.){3}\d{1,3}$');
     if (!ipRegex.hasMatch(ip.trim())) {
       return false;
     }
     
-    // IP range check
     final parts = ip.trim().split('.');
     for (final part in parts) {
       final num = int.tryParse(part);
@@ -46,6 +47,7 @@ class LBDeviceCredentials extends Equatable {
   }
 
   String? get validationError {
+    // ... no changes needed here
     if (ip.trim().isEmpty) return 'IP address cannot be empty';
     if (username.trim().isEmpty) return 'Username cannot be empty';
     if (password.trim().isEmpty) return 'Password cannot be empty';
@@ -66,8 +68,10 @@ class LBDeviceCredentials extends Equatable {
     return null;
   }
 
+
   LBDeviceCredentials copyWith({
     String? ip,
+    int? port, // **NEW: Added to copyWith**
     String? username,
     String? password,
     String? enablePassword,
@@ -77,6 +81,7 @@ class LBDeviceCredentials extends Equatable {
   }) {
     return LBDeviceCredentials(
       ip: ip ?? this.ip,
+      port: port ?? this.port, // **NEW**
       username: username ?? this.username,
       password: password ?? this.password,
       enablePassword: enablePassword ?? this.enablePassword,
@@ -89,6 +94,7 @@ class LBDeviceCredentials extends Equatable {
   @override
   List<Object?> get props => [
         ip,
+        port, // **NEW: Added to props**
         username,
         password,
         enablePassword,
@@ -99,6 +105,6 @@ class LBDeviceCredentials extends Equatable {
       
   @override
   String toString() {
-    return 'DeviceCredentials(ip: $ip, username: $username, type: $type)';
+    return 'DeviceCredentials(ip: $ip:$port, username: $username, type: $type)';
   }
 }

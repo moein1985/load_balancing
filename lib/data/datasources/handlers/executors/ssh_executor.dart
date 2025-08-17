@@ -18,18 +18,23 @@ class SshExecutor {
   }
 
   Future<SSHClient> createSshClient(LBDeviceCredentials credentials) async {
-    _logDebug('Creating SSH connection to ${credentials.ip}');
+    _logDebug(
+      'Creating SSH connection to ${credentials.ip}:${credentials.port}',
+    ); // **MODIFIED**
     try {
+      // **MODIFIED: Use the port from credentials instead of hardcoded 22**
       final socket = await SSHSocket.connect(
         credentials.ip,
-        22,
+        credentials.port,
         timeout: _connectionTimeout,
       );
+
       final client = SSHClient(
         socket,
         username: credentials.username,
         onPasswordRequest: () => credentials.password,
       );
+
       _logDebug('SSH connection established');
       return client;
     } on TimeoutException {
@@ -55,6 +60,7 @@ class SshExecutor {
     }
   }
 
+  // ... rest of the file remains unchanged ...
   Future<List<String>> execute(
     LBDeviceCredentials credentials,
     SSHClient client,
@@ -105,76 +111,86 @@ class SshExecutor {
       }
     }
 
-    shell.stdout.cast<List<int>>().transform(utf8.decoder).listen(
-      (data) {
-        _logDebug('RAW SSH: "$data"');
-        currentOutput.write(data);
-        final receivedText = currentOutput.toString().trim();
+    shell.stdout
+        .cast<List<int>>()
+        .transform(utf8.decoder)
+        .listen(
+          (data) {
+            _logDebug('RAW SSH: "$data"');
+            currentOutput.write(data);
+            final receivedText = currentOutput.toString().trim();
 
-        switch (sessionState) {
-          case 'connecting':
-            if (isPrompt(receivedText)) {
-              if (receivedText.endsWith('>')) {
-                _logDebug('User prompt detected. Sending enable.');
-                sessionState = 'enabling';
-                currentOutput.clear();
-                shell.stdin.add(utf8.encode('enable\n'));
-              } else if (receivedText.endsWith('#')) {
-                _logDebug('Privileged prompt detected. Starting commands.');
-                sessionState = 'executing';
-                currentOutput.clear();
-                sendNextCommand();
+            switch (sessionState) {
+              case 'connecting':
+                if (isPrompt(receivedText)) {
+                  if (receivedText.endsWith('>')) {
+                    _logDebug('User prompt detected. Sending enable.');
+                    sessionState = 'enabling';
+                    currentOutput.clear();
+                    shell.stdin.add(utf8.encode('enable\n'));
+                  } else if (receivedText.endsWith('#')) {
+                    _logDebug('Privileged prompt detected. Starting commands.');
+                    sessionState = 'executing';
+                    currentOutput.clear();
+                    sendNextCommand();
+                  }
+                }
+                break;
+              case 'enabling':
+                if (RegExp(
+                  r'password[:]?\s*$',
+                  caseSensitive: false,
+                ).hasMatch(receivedText)) {
+                  _logDebug('Enable password prompt detected.');
+                  sessionState = 'sending_enable_password';
+                  currentOutput.clear();
+                  shell.stdin.add(utf8.encode('${enablePassword ?? ''}\n'));
+                } else if (isPrompt(receivedText) &&
+                    receivedText.endsWith('#')) {
+                  _logDebug(
+                    'Enabled successfully (no password). Starting commands.',
+                  );
+                  sessionState = 'executing';
+                  currentOutput.clear();
+                  sendNextCommand();
+                }
+                break;
+              case 'sending_enable_password':
+                if (isPrompt(receivedText) && receivedText.endsWith('#')) {
+                  _logDebug('Enabled with password. Starting commands.');
+                  sessionState = 'executing';
+                  currentOutput.clear();
+                  sendNextCommand();
+                } else if (isPrompt(receivedText) &&
+                    receivedText.endsWith('>')) {
+                  if (!completer.isCompleted) {
+                    completer.completeError(
+                      const ServerFailure('Enable failed. Check password.'),
+                    );
+                    shell.close();
+                  }
+                }
+                break;
+              case 'executing':
+                if (isPrompt(receivedText)) {
+                  processAndAddOutput();
+                  sendNextCommand();
+                }
+                break;
+            }
+          },
+          onError: (e) {
+            if (!completer.isCompleted) completer.completeError(e);
+          },
+          onDone: () {
+            if (!completer.isCompleted) {
+              if (currentOutput.isNotEmpty) {
+                processAndAddOutput();
               }
+              completer.complete(outputs);
             }
-            break;
-          case 'enabling':
-            if (RegExp(r'password[:]?\s*$', caseSensitive: false)
-                .hasMatch(receivedText)) {
-              _logDebug('Enable password prompt detected.');
-              sessionState = 'sending_enable_password';
-              currentOutput.clear();
-              shell.stdin.add(utf8.encode('${enablePassword ?? ''}\n'));
-            } else if (isPrompt(receivedText) && receivedText.endsWith('#')) {
-              _logDebug('Enabled successfully (no password). Starting commands.');
-              sessionState = 'executing';
-              currentOutput.clear();
-              sendNextCommand();
-            }
-            break;
-          case 'sending_enable_password':
-            if (isPrompt(receivedText) && receivedText.endsWith('#')) {
-              _logDebug('Enabled with password. Starting commands.');
-              sessionState = 'executing';
-              currentOutput.clear();
-              sendNextCommand();
-            } else if (isPrompt(receivedText) && receivedText.endsWith('>')) {
-              if (!completer.isCompleted) {
-                completer.completeError(
-                    const ServerFailure('Enable failed. Check password.'));
-                shell.close();
-              }
-            }
-            break;
-          case 'executing':
-            if (isPrompt(receivedText)) {
-              processAndAddOutput();
-              sendNextCommand();
-            }
-            break;
-        }
-      },
-      onError: (e) {
-        if (!completer.isCompleted) completer.completeError(e);
-      },
-      onDone: () {
-        if (!completer.isCompleted) {
-          if (currentOutput.isNotEmpty) {
-            processAndAddOutput();
-          }
-          completer.complete(outputs);
-        }
-      },
-    );
+          },
+        );
 
     return completer.future.timeout(_commandTimeout);
   }
