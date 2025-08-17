@@ -11,7 +11,6 @@ class PbrRuleCard extends StatelessWidget {
   final RouteMap routeMap;
   final List<AccessControlList> allAcls;
   const PbrRuleCard({super.key, required this.routeMap, required this.allAcls});
-
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -53,10 +52,8 @@ class PbrRuleCard extends StatelessWidget {
                   icon: const Icon(Icons.edit_outlined),
                   tooltip: 'Edit Rule',
                   onPressed: () async {
-                    final credentials = context
-                        .read<LoadBalancingBloc>()
-                        .state
-                        .credentials;
+                    final bloc = context.read<LoadBalancingBloc>();
+                    final credentials = bloc.state.credentials;
                     if (credentials != null) {
                       final result = await context
                           .pushNamed<
@@ -66,21 +63,19 @@ class PbrRuleCard extends StatelessWidget {
                             pathParameters: {'ruleId': routeMap.name},
                             extra: credentials,
                           );
-
                       if (result != null && context.mounted) {
-                        // **تغییر اصلی:**
-                        // 1. ابتدا برای سرعت، یک آپدیت خوشبینانه انجام می‌دهیم.
-                        context.read<LoadBalancingBloc>().add(
+                        bloc.add(
                           PbrRuleUpserted(
                             newRule: result.newRule,
                             newAcl: result.newAcl,
                             oldRuleName: routeMap.name,
                           ),
                         );
-                        // 2. سپس، برای تضمین هماهنگی کامل داده‌ها، یک درخواست بازخوانی کامل از روتر ارسال می‌کنیم.
-                        // این کار مشکل ACL not found را به طور قطعی حل می‌کند.
-                        context.read<LoadBalancingBloc>().add(
-                          FetchPbrConfigurationRequested(),
+                        // *** MODIFIED: Pass credentials to the event ***
+                        bloc.add(
+                          FetchPbrConfigurationRequested(
+                            credentials: credentials,
+                          ),
                         );
                       }
                     }

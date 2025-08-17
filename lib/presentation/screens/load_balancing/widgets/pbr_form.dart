@@ -2,20 +2,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
-import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart' as events;
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_event.dart'
+    as events;
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_rule_card.dart';
 
 class PbrForm extends StatelessWidget {
   const PbrForm({super.key});
-
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
-      // **تغییر اصلی و مهم در این خط است**
-      // ویجت اکنون هم به تغییر وضعیت و هم به تغییر لیست رول‌ها واکنش نشان می‌دهد.
       buildWhen: (prev, curr) =>
-          prev.pbrStatus != curr.pbrStatus || prev.pbrRouteMaps != curr.pbrRouteMaps,
+          prev.pbrStatus != curr.pbrStatus ||
+          prev.pbrRouteMaps != curr.pbrRouteMaps,
       builder: (context, state) {
         switch (state.pbrStatus) {
           case DataStatus.initial:
@@ -41,7 +40,11 @@ class PbrForm extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.error_outline, color: Colors.red, size: 48),
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 48,
+                    ),
                     const SizedBox(height: 16),
                     Text(
                       'Failed to load PBR rules',
@@ -55,19 +58,28 @@ class PbrForm extends StatelessWidget {
                       icon: const Icon(Icons.refresh),
                       label: const Text('Retry'),
                       onPressed: () {
-                        context.read<LoadBalancingBloc>().add(events.FetchPbrConfigurationRequested());
+                        // *** MODIFIED: Pass credentials to the event ***
+                        if (state.credentials != null) {
+                          context.read<LoadBalancingBloc>().add(
+                            events.FetchPbrConfigurationRequested(
+                              credentials: state.credentials!,
+                            ),
+                          );
+                        }
                       },
-                    )
+                    ),
                   ],
                 ),
               ),
             );
-
           case DataStatus.success:
             if (state.pbrRouteMaps.isEmpty) {
               return Center(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 48.0, horizontal: 16.0),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 48.0,
+                    horizontal: 16.0,
+                  ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -92,7 +104,6 @@ class PbrForm extends StatelessWidget {
                 ),
               );
             }
-            // نمایش لیست کارت‌ها
             return ListView.builder(
               physics: const NeverScrollableScrollPhysics(),
               shrinkWrap: true,

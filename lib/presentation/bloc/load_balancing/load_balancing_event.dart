@@ -1,10 +1,11 @@
 // lib/presentation/bloc/load_balancing/load_balancing_event.dart
 import 'package:equatable/equatable.dart';
-import 'package:load_balance/domain/entities/access_control_list.dart'; // **ایمپورت جدید**
+import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 import '../../../domain/entities/route_map.dart';
+
 abstract class LoadBalancingEvent extends Equatable {
   const LoadBalancingEvent();
   @override
@@ -29,9 +30,24 @@ class LoadBalancingTypeSelected extends LoadBalancingEvent {
 
 class FetchInterfacesRequested extends LoadBalancingEvent {}
 
-class FetchRoutingTableRequested extends LoadBalancingEvent {}
+// *** MODIFIED ***
+class FetchRoutingTableRequested extends LoadBalancingEvent {
+  final LBDeviceCredentials credentials;
+  const FetchRoutingTableRequested({required this.credentials});
 
-class FetchPbrConfigurationRequested extends LoadBalancingEvent {}
+  @override
+  List<Object?> get props => [credentials];
+}
+
+// *** MODIFIED ***
+class FetchPbrConfigurationRequested extends LoadBalancingEvent {
+  final LBDeviceCredentials credentials;
+  const FetchPbrConfigurationRequested({required this.credentials});
+
+  @override
+  List<Object?> get props => [credentials];
+}
+
 
 class PingGatewayRequested extends LoadBalancingEvent {
   final String ipAddress;
@@ -61,17 +77,13 @@ class DeletePbrRuleRequested extends LoadBalancingEvent {
   List<Object> get props => [ruleToDelete];
 }
 
-// رویداد برای آپدیت خوشبینانه UI پس از ساخت/ویرایش یک رول.
 class PbrRuleUpserted extends LoadBalancingEvent {
   final RouteMap newRule;
-  // **تغییر ۱: فیلد جدید برای حمل ACL**
-  final AccessControlList? newAcl; 
-  // نام اصلی رول برای مدیریت تغییر نام در هنگام ویرایش اضافه شده است.
+  final AccessControlList? newAcl;
   final String? oldRuleName;
 
   const PbrRuleUpserted({required this.newRule, this.newAcl, this.oldRuleName});
 
   @override
-  // **تغییر ۲: اضافه شدن فیلد جدید به props**
   List<Object?> get props => [newRule, newAcl, oldRuleName];
 }

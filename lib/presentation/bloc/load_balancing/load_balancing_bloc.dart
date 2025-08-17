@@ -43,7 +43,6 @@ class LoadBalancingBloc
     on<events.PbrRuleUpserted>(_onPbrRuleUpserted);
   }
 
-  // ... (متدهای close و logDebug بدون تغییر باقی می‌مانند) ...
   @override
   Future<void> close() {
     for (final timer in _pingTimers.values) {
@@ -63,12 +62,11 @@ class LoadBalancingBloc
     events.FetchPbrConfigurationRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
-    if (state.credentials == null) return;
     _logDebug('Starting to fetch PBR configuration');
     emit(state.copyWith(pbrStatus: DataStatus.loading));
 
-    final result = await getPbrConfiguration(state.credentials!);
-
+    // *** MODIFIED: Use credentials from the event ***
+    final result = await getPbrConfiguration(event.credentials);
     result.fold(
       (failure) {
         _logDebug('Error fetching PBR config: ${failure.message}');
@@ -98,7 +96,6 @@ class LoadBalancingBloc
     events.FetchRoutingTableRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
-    if (state.credentials == null) return;
     _logDebug('Starting to fetch routing table');
     emit(
       state.copyWith(
@@ -106,8 +103,8 @@ class LoadBalancingBloc
         clearRoutingTable: true,
       ),
     );
-
-    final result = await getRoutingTable(state.credentials!);
+    // *** MODIFIED: Use credentials from the event ***
+    final result = await getRoutingTable(event.credentials);
 
     result.fold(
       (failure) {
@@ -139,23 +136,19 @@ class LoadBalancingBloc
     events.PingGatewayRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
-    // ... (منطق اولیه بدون تغییر)
     if (state.credentials == null) return;
     final ipAddress = event.ipAddress.trim();
     if (ipAddress.isEmpty) {
-      /* ... */
       return;
     }
     if (state.pingingIp == ipAddress) return;
     _pingTimers[ipAddress]?.cancel();
     _logDebug('Starting ping for IP: $ipAddress');
     emit(state.copyWith(pingStatus: DataStatus.loading, pingingIp: ipAddress));
-
     final result = await pingGateway(
       credentials: state.credentials!,
       ipAddress: ipAddress,
     );
-
     _pingTimers[ipAddress]?.cancel();
     _pingTimers.remove(ipAddress);
 
@@ -191,7 +184,6 @@ class LoadBalancingBloc
     events.ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
-    // ... (منطق اولیه بدون تغییر)
     if (state.credentials == null) return;
     _logDebug('Starting to apply ECMP config');
     final initialGateways = state.initialEcmpGateways;
@@ -202,7 +194,6 @@ class LoadBalancingBloc
     final gatewaysToRemove = initialGateways
         .where((g) => !finalGateways.contains(g))
         .toList();
-
     emit(state.copyWith(status: DataStatus.loading, clearSuccessMessage: true));
 
     final result = await applyEcmpConfig(
@@ -210,7 +201,6 @@ class LoadBalancingBloc
       gatewaysToAdd: gatewaysToAdd,
       gatewaysToRemove: gatewaysToRemove,
     );
-
     result.fold(
       (failure) {
         _logDebug('Error applying ECMP config: ${failure.message}');
@@ -229,7 +219,7 @@ class LoadBalancingBloc
             successMessage: successMessage,
           ),
         );
-        add(events.FetchRoutingTableRequested());
+        add(events.FetchRoutingTableRequested(credentials: state.credentials!));
       },
     );
   }
@@ -245,7 +235,6 @@ class LoadBalancingBloc
       credentials: state.credentials!,
       ruleToDelete: event.ruleToDelete,
     );
-
     result.fold(
       (failure) => emit(
         state.copyWith(status: DataStatus.failure, error: failure.message),
@@ -265,8 +254,6 @@ class LoadBalancingBloc
     );
   }
 
-  // ... (سایر متدها مانند onScreenStarted, onClearPingResult, onPbrRuleUpserted, _parseEcmpGateways, onLoadBalancingTypeSelected, onFetchInterfaces بدون تغییر باقی می‌مانند)
-  // ...
   void _onScreenStarted(
     events.ScreenStarted event,
     Emitter<LoadBalancingState> emit,
@@ -279,7 +266,8 @@ class LoadBalancingBloc
         interfacesStatus: DataStatus.success,
       ),
     );
-    add(events.FetchRoutingTableRequested());
+    // *** MODIFIED: Pass credentials to the event ***
+    add(events.FetchRoutingTableRequested(credentials: event.credentials));
   }
 
   void _onClearPingResult(
@@ -358,14 +346,19 @@ class LoadBalancingBloc
     events.LoadBalancingTypeSelected event,
     Emitter<LoadBalancingState> emit,
   ) {
+    if (state.credentials == null) return;
     _logDebug('Load Balancing type selected: ${event.type}');
     emit(state.copyWith(type: event.type));
 
     if (event.type == LoadBalancingType.pbr &&
         state.pbrStatus == DataStatus.initial) {
-      add(events.FetchPbrConfigurationRequested());
+      // *** MODIFIED: Pass credentials to the event ***
+      add(
+        events.FetchPbrConfigurationRequested(credentials: state.credentials!),
+      );
     } else if (event.type == LoadBalancingType.ecmp) {
-      add(events.FetchRoutingTableRequested());
+      // *** MODIFIED: Pass credentials to the event ***
+      add(events.FetchRoutingTableRequested(credentials: state.credentials!));
     }
   }
 
@@ -380,7 +373,6 @@ class LoadBalancingBloc
     _logDebug('Starting to fetch interfaces (manual refresh)');
     emit(state.copyWith(interfacesStatus: DataStatus.loading));
     final result = await getInterfaces(state.credentials!);
-
     result.fold(
       (failure) {
         _logDebug('Error fetching interfaces: ${failure.message}');
