@@ -20,13 +20,11 @@ class AddEditPbrRuleScreen extends StatelessWidget {
   const AddEditPbrRuleScreen({super.key, this.credentials, this.ruleId});
   @override
   Widget build(BuildContext context) {
-    final loadBalancingState = context.read<LoadBalancingBloc>().state;
+    // **تغییر اصلی:** BLoC را مستقیماً از Service Locator می‌خوانیم
+    final loadBalancingState = sl<LoadBalancingBloc>().state;
     final isEditing = ruleId != null;
-
     return BlocProvider(
       create: (context) {
-        // **تغییر اصلی:**
-        // به جای ساخت دستی UseCase ها، آنها را مستقیماً از Service Locator (sl) می‌گیریم
         return PbrRuleFormBloc(
           applyPbrRule: sl<ApplyPbrRule>(),
           editPbrRule: sl<EditPbrRule>(),
@@ -53,7 +51,6 @@ class AddEditPbrRuleScreen extends StatelessWidget {
                   backgroundColor: Colors.green,
                 ),
               );
-
             if (state.submittedRule != null) {
               Navigator.of(context).pop((
                 newRule: state.submittedRule!,
@@ -129,14 +126,12 @@ class AddEditPbrRuleScreen extends StatelessWidget {
 // ... ویجت _RuleNameCard بدون تغییر باقی می‌ماند ...
 class _RuleNameCard extends StatefulWidget {
   const _RuleNameCard();
-
   @override
   State<_RuleNameCard> createState() => _RuleNameCardState();
 }
 
 class _RuleNameCardState extends State<_RuleNameCard> {
   late final TextEditingController _controller;
-
   @override
   void initState() {
     super.initState();

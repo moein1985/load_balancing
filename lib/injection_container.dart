@@ -22,7 +22,10 @@ final sl = GetIt.instance;
 Future<void> init() async {
   // BLoCs
   sl.registerFactory(() => RouterConnectionBloc(checkCredentials: sl()));
-  sl.registerFactory(() => LoadBalancingBloc(
+  
+  // *** THIS IS THE FIX ***
+  // Changed from registerFactory to ensure the same instance is used across screens.
+  sl.registerLazySingleton(() => LoadBalancingBloc(
         getInterfaces: sl(),
         getRoutingTable: sl(),
         pingGateway: sl(),
@@ -41,7 +44,7 @@ Future<void> init() async {
   sl.registerLazySingleton(() => ApplyPbrRule(sl()));
   sl.registerLazySingleton(() => DeletePbrRule(sl()));
   sl.registerLazySingleton(() => EditPbrRule(sl()));
-
+  
   // Repository
   sl.registerLazySingleton<RouterRepository>(
       () => DeviceRepositoryImpl(remoteDataSource: sl()));

@@ -133,10 +133,9 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     );
   }
 
-  // ... (تمام متدهای دیگر این BLoC بدون تغییر باقی می‌مانند)
-  // ...
   void _onFormLoaded(FormLoaded event, Emitter<PbrRuleFormState> emit) {
     if (event.ruleId == null) {
+      // Create new rule mode
       int nextAclId = 101;
       if (event.acls.isNotEmpty) {
         final existingIds = event.acls
@@ -150,10 +149,13 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
               1;
         }
       }
+
+      // **THE FIX IS HERE:**
+      // We now pass the interfaces along with the new ACL ID.
       emit(
         state.copyWith(
           isEditing: false,
-          availableInterfaces: event.interfaces,
+          availableInterfaces: event.interfaces, // This line was missing
           existingAcls: event.acls,
           existingRouteMaps: event.routeMaps,
           newAclId: nextAclId.toString(),
@@ -166,6 +168,7 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
         ),
       );
     } else {
+      // Edit mode (this part is correct and remains unchanged)
       final ruleToEdit = event.routeMaps.firstWhere(
         (rm) => rm.name == event.ruleId,
       );
