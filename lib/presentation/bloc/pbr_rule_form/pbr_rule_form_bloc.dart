@@ -41,15 +41,107 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
     on<FormSubmitted>(_onFormSubmitted);
   }
 
+  Future<void> _onFormSubmitted(
+    FormSubmitted event,
+    Emitter<PbrRuleFormState> emit,
+  ) async {
+    if (!state.isFormValid) {
+      emit(
+        state.copyWith(
+          formStatus: DataStatus.failure,
+          errorMessage: 'Please correct the errors in the form.',
+        ),
+      );
+      return;
+    }
+
+    emit(state.copyWith(formStatus: DataStatus.loading));
+
+    // ... (منطق ساخت آبجکت‌های newRouteMap و newSubmission بدون تغییر باقی می‌ماند)
+    AccessControlList? aclForSubmission;
+    String aclIdToMatch;
+    if (state.aclMode == AclSelectionMode.createNew) {
+      aclIdToMatch = state.newAclId;
+      aclForSubmission = AccessControlList(
+        id: aclIdToMatch,
+        entries: state.newAclEntries,
+      );
+    } else {
+      aclIdToMatch = state.selectedAclId!;
+      try {
+        aclForSubmission = state.existingAcls.firstWhere(
+          (acl) => acl.id == aclIdToMatch,
+        );
+      } catch (e) {
+        emit(
+          state.copyWith(
+            formStatus: DataStatus.failure,
+            errorMessage: 'Selected ACL ($aclIdToMatch) could not be found.',
+          ),
+        );
+        return;
+      }
+    }
+    final action = state.actionType == PbrActionType.nextHop
+        ? SetNextHopAction([state.nextHop])
+        : SetInterfaceAction([state.egressInterface]);
+    final newRouteMap = RouteMap(
+      name: state.ruleName,
+      appliedToInterface: state.applyToInterface,
+      entries: [
+        RouteMapEntry(
+          permission: 'permit',
+          sequence: 10,
+          matchAclId: aclIdToMatch,
+          action: action,
+        ),
+      ],
+    );
+    final newSubmission = PbrSubmission(
+      routeMap: newRouteMap,
+      newAcl: aclForSubmission,
+    );
+
+    final result = state.isEditing
+        ? await editPbrRule(
+            credentials: credentials,
+            oldRule: state.initialRule!,
+            newSubmission: newSubmission,
+          )
+        : await applyPbrRule(
+            credentials: credentials,
+            submission: newSubmission,
+          );
+
+    result.fold(
+      (failure) => emit(
+        state.copyWith(
+          formStatus: DataStatus.failure,
+          errorMessage: failure.message,
+        ),
+      ),
+      (successMessage) => emit(
+        state.copyWith(
+          formStatus: DataStatus.success,
+          successMessage: successMessage,
+          submittedRule: newRouteMap,
+          submittedAcl: (state.aclMode == AclSelectionMode.createNew)
+              ? aclForSubmission
+              : null,
+        ),
+      ),
+    );
+  }
+
+  // ... (تمام متدهای دیگر این BLoC بدون تغییر باقی می‌مانند)
+  // ...
   void _onFormLoaded(FormLoaded event, Emitter<PbrRuleFormState> emit) {
     if (event.ruleId == null) {
-      // **تغییر اصلی اینجاست**
-      // محاسبه شماره ACL پیشنهادی جدید
       int nextAclId = 101;
       if (event.acls.isNotEmpty) {
         final existingIds = event.acls
             .map((acl) => int.tryParse(acl.id) ?? 0)
-            .where((id) => id >= 100 && id <= 199); // فقط شماره‌های Extended
+            .where((id) => id >= 100 && id <= 199);
         if (existingIds.isNotEmpty) {
           nextAclId =
               existingIds.reduce(
@@ -58,15 +150,13 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
               1;
         }
       }
-
-      // حالت ساخت رول جدید
       emit(
         state.copyWith(
           isEditing: false,
           availableInterfaces: event.interfaces,
           existingAcls: event.acls,
           existingRouteMaps: event.routeMaps,
-          newAclId: nextAclId.toString(), // استفاده از شماره جدید
+          newAclId: nextAclId.toString(),
           egressInterface: event.interfaces.isNotEmpty
               ? event.interfaces.first.name
               : '',
@@ -76,7 +166,6 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
         ),
       );
     } else {
-      // حالت ویرایش
       final ruleToEdit = event.routeMaps.firstWhere(
         (rm) => rm.name == event.ruleId,
       );
@@ -89,7 +178,6 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
           // ACL not found
         }
       }
-
       final action = ruleToEdit.entries.first.action;
       final actionType = action is SetNextHopAction
           ? PbrActionType.nextHop
@@ -98,7 +186,6 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
       final egressInterface = action is SetInterfaceAction
           ? action.interfaces.first
           : (event.interfaces.isNotEmpty ? event.interfaces.first.name : '');
-
       emit(
         state.copyWith(
           isEditing: true,
@@ -211,106 +298,5 @@ class PbrRuleFormBloc extends Bloc<PbrRuleFormEvent, PbrRuleFormState> {
         nextHopError: FormValidators.ip(event.value),
       ),
     );
-  }
-
-  Future<void> _onFormSubmitted(
-    FormSubmitted event,
-    Emitter<PbrRuleFormState> emit,
-  ) async {
-    if (!state.isFormValid) {
-      emit(
-        state.copyWith(
-          formStatus: DataStatus.failure,
-          errorMessage: 'Please correct the errors in the form.',
-        ),
-      );
-      return;
-    }
-
-    emit(state.copyWith(formStatus: DataStatus.loading));
-
-    AccessControlList? aclForSubmission;
-    String aclIdToMatch;
-
-    if (state.aclMode == AclSelectionMode.createNew) {
-      aclIdToMatch = state.newAclId;
-      aclForSubmission = AccessControlList(
-        id: aclIdToMatch,
-        entries: state.newAclEntries,
-      );
-    } else {
-      // AclSelectionMode.selectExisting
-      aclIdToMatch = state.selectedAclId!;
-      try {
-        aclForSubmission = state.existingAcls.firstWhere(
-          (acl) => acl.id == aclIdToMatch,
-        );
-      } catch (e) {
-        emit(
-          state.copyWith(
-            formStatus: DataStatus.failure,
-            errorMessage:
-                'Selected ACL ($aclIdToMatch) could not be found in the current state.',
-          ),
-        );
-        return;
-      }
-    }
-
-    final action = state.actionType == PbrActionType.nextHop
-        ? SetNextHopAction([state.nextHop])
-        : SetInterfaceAction([state.egressInterface]);
-
-    final newRouteMap = RouteMap(
-      name: state.ruleName,
-      appliedToInterface: state.applyToInterface,
-      entries: [
-        RouteMapEntry(
-          permission: 'permit',
-          sequence: 10,
-          matchAclId: aclIdToMatch,
-          action: action,
-        ),
-      ],
-    );
-
-    final newSubmission = PbrSubmission(
-      routeMap: newRouteMap,
-      newAcl: aclForSubmission,
-    );
-
-    try {
-      String result;
-      if (state.isEditing) {
-        result = await editPbrRule(
-          credentials: credentials,
-          oldRule: state.initialRule!,
-          newSubmission: newSubmission,
-        );
-      } else {
-        result = await applyPbrRule(
-          credentials: credentials,
-          submission: newSubmission,
-        );
-      }
-
-      emit(
-        state.copyWith(
-          formStatus: DataStatus.success,
-          successMessage: result,
-          submittedRule: newRouteMap,
-          submittedAcl: (state.aclMode == AclSelectionMode.createNew)
-              ? aclForSubmission
-              : null,
-        ),
-      );
-    } catch (e) {
-      emit(
-        state.copyWith(
-          formStatus: DataStatus.failure,
-          errorMessage: e.toString(),
-        ),
-      );
-    }
   }
 }

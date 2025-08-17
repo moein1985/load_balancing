@@ -11,7 +11,11 @@ dependencies:
     sdk: flutter
 #State Managent
   flutter_bloc: ^9.1.1
+
+ # Helper tools for code simplification.
   equatable: ^2.0.7
+  get_it: ^8.0.3 
+  
 #Router
   go_router: ^16.0.0
 #Connection
@@ -19,6 +23,10 @@ dependencies:
   ctelnet: ^0.3.1
   dio: ^5.8.0+1
   dart_ping: ^9.0.1
+
+# --- Functional Programming ---
+# For functional programming paradigms in Dart.
+  fpdart: ^1.1.1
 
 dev_dependencies:
   flutter_test:

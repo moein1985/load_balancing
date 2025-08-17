@@ -1,4 +1,6 @@
 // lib/domain/usecases/apply_ecmp_config.dart
+import 'package:fpdart/fpdart.dart';
+import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/repositories/router_repository.dart';
 
@@ -7,13 +9,11 @@ class ApplyEcmpConfig {
 
   ApplyEcmpConfig(this.repository);
 
-  /// Executes the use case to apply ECMP configuration.
-  Future<String> call({
+  Future<Either<Failure, String>> call({
     required LBDeviceCredentials credentials,
     required List<String> gatewaysToAdd,
     required List<String> gatewaysToRemove,
   }) async {
-    // Pass both lists to the repository's method
     return await repository.applyEcmpConfig(
       credentials: credentials,
       gatewaysToAdd: gatewaysToAdd,

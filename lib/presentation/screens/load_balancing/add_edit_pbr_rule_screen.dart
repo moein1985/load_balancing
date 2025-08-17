@@ -2,75 +2,74 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
-import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
 import 'package:load_balance/domain/usecases/edit_pbr_rule.dart';
-// import کردن use case جدید
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_event.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_state.dart';
-import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart' show DataStatus;
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart'
+    show DataStatus;
 import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_acl_section.dart';
 import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_rule_form_sections.dart';
+import 'package:load_balance/injection_container.dart'; // <--- ایمپورت get_it
 
 class AddEditPbrRuleScreen extends StatelessWidget {
   final LBDeviceCredentials? credentials;
   final String? ruleId;
-  const AddEditPbrRuleScreen({
-    super.key,
-    this.credentials,
-    this.ruleId,
-  });
+  const AddEditPbrRuleScreen({super.key, this.credentials, this.ruleId});
   @override
   Widget build(BuildContext context) {
     final loadBalancingState = context.read<LoadBalancingBloc>().state;
     final isEditing = ruleId != null;
-    // **تغییر ۱: Use cases را اینجا می‌سازیم**
-    final repository = context.read<RouterRepository>();
-    final applyPbrRule = ApplyPbrRule(repository);
-    final editPbrRule = EditPbrRule(repository);
 
     return BlocProvider(
       create: (context) {
-        // **تغییر ۲: هر دو use case را به BLoC پاس می‌دهیم**
+        // **تغییر اصلی:**
+        // به جای ساخت دستی UseCase ها، آنها را مستقیماً از Service Locator (sl) می‌گیریم
         return PbrRuleFormBloc(
-          applyPbrRule: applyPbrRule,
-          editPbrRule: editPbrRule,
+          applyPbrRule: sl<ApplyPbrRule>(),
+          editPbrRule: sl<EditPbrRule>(),
           credentials: credentials!,
-        )..add(FormLoaded(
+        )..add(
+          FormLoaded(
             interfaces: loadBalancingState.interfaces,
             acls: loadBalancingState.pbrAccessLists,
             routeMaps: loadBalancingState.pbrRouteMaps,
             ruleId: ruleId,
-          ));
+          ),
+        );
       },
       child: BlocListener<PbrRuleFormBloc, PbrRuleFormState>(
         listenWhen: (prev, curr) => prev.formStatus != curr.formStatus,
         listener: (context, state) {
-          if (state.formStatus == DataStatus.success && state.successMessage != null) {
+          if (state.formStatus == DataStatus.success &&
+              state.successMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
-              ..showSnackBar(SnackBar(
-                content: Text(state.successMessage!),
-                backgroundColor: Colors.green,
-              ));
-            // **تغییر اصلی: یک رکورد شامل هر دو آبجکت را برمی‌گردانیم**
-            if (state.submittedRule != null) {
-              Navigator.of(context).pop(
-                (
-                  newRule: state.submittedRule!,
-                  newAcl: state.submittedAcl,
-                )
+              ..showSnackBar(
+                SnackBar(
+                  content: Text(state.successMessage!),
+                  backgroundColor: Colors.green,
+                ),
               );
+
+            if (state.submittedRule != null) {
+              Navigator.of(context).pop((
+                newRule: state.submittedRule!,
+                newAcl: state.submittedAcl,
+              ));
             }
-          } else if (state.formStatus == DataStatus.failure && state.errorMessage != null) {
+          } else if (state.formStatus == DataStatus.failure &&
+              state.errorMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
-              ..showSnackBar(SnackBar(
-                content: Text(state.errorMessage!),
-                backgroundColor: Colors.red,
-              ));
+              ..showSnackBar(
+                SnackBar(
+                  content: Text(state.errorMessage!),
+                  backgroundColor: Colors.red,
+                ),
+              );
           }
         },
         child: Scaffold(
@@ -85,13 +84,18 @@ class AddEditPbrRuleScreen extends StatelessWidget {
                       child: SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       ),
                     );
                   }
                   return TextButton(
                     onPressed: state.isFormValid
-                        ? () => context.read<PbrRuleFormBloc>().add(FormSubmitted())
+                        ? () => context.read<PbrRuleFormBloc>().add(
+                            FormSubmitted(),
+                          )
                         : null,
                     child: const Text('SAVE'),
                   );
@@ -105,7 +109,6 @@ class AddEditPbrRuleScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // **تغییر ۳: دیگر isEditing را پاس نمی‌دهیم چون همیشه قابل ویرایش است**
                   const _RuleNameCard(),
                   const SizedBox(height: 16),
                   const PbrAclSection(),
@@ -123,6 +126,7 @@ class AddEditPbrRuleScreen extends StatelessWidget {
   }
 }
 
+// ... ویجت _RuleNameCard بدون تغییر باقی می‌ماند ...
 class _RuleNameCard extends StatefulWidget {
   const _RuleNameCard();
 
@@ -160,19 +164,19 @@ class _RuleNameCardState extends State<_RuleNameCard> {
             }
           },
           child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
-            buildWhen: (p, c) => p.ruleNameError != c.ruleNameError || p.isEditing != c.isEditing,
+            buildWhen: (p, c) =>
+                p.ruleNameError != c.ruleNameError ||
+                p.isEditing != c.isEditing,
             builder: (context, state) {
               return TextFormField(
                 controller: _controller,
-                // **تغییر ۴: فیلد نام رول همیشه قابل ویرایش است**
-                // readOnly: isEditing,
                 decoration: InputDecoration(
                   labelText: 'Rule Name (Route-Map Name)',
                   hintText: 'e.g., FROM_LAN_TO_ISP2',
-                  // خطا برای نام تکراری فقط در حالت ساخت جدید نمایش داده می‌شود
                   errorText: state.ruleNameError,
                 ),
-                onChanged: (value) => context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
+                onChanged: (value) =>
+                    context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
               );
             },
           ),

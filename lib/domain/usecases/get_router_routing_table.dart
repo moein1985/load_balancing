@@ -1,4 +1,6 @@
-// domain/usecases/get_routing_table.dart
+// lib/domain/usecases/get_router_routing_table.dart
+import 'package:fpdart/fpdart.dart';
+import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/repositories/router_repository.dart';
 
@@ -7,8 +9,7 @@ class GetRouterRoutingTable {
 
   GetRouterRoutingTable(this.repository);
 
-  Future<String> call(LBDeviceCredentials credentials) async {
+  Future<Either<Failure, String>> call(LBDeviceCredentials credentials) async {
     return await repository.getRoutingTable(credentials);
   }
 }
-//test

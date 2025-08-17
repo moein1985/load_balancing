@@ -1,4 +1,6 @@
 // lib/domain/usecases/get_pbr_configuration.dart
+import 'package:fpdart/fpdart.dart';
+import 'package:load_balance/core/error/failure.dart';
 import 'package:load_balance/data/datasources/pbr_parser.dart';
 import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
@@ -17,29 +19,37 @@ class GetPbrConfiguration {
 
   GetPbrConfiguration(this.repository);
 
-  Future<PbrConfiguration> call(LBDeviceCredentials credentials) async {
-    // We get the raw config from the repository
-    final config = await repository.getRunningConfig(credentials);
-    
-    // The use case is responsible for orchestrating the parsing
-    final parsedRouteMaps = PbrParser.parseRouteMaps(config);
-    final parsedAcls = PbrParser.parseAccessLists(config);
-    final interfacePolicies = PbrParser.parseInterfacePolicies(config);
+  Future<Either<Failure, PbrConfiguration>> call(
+      LBDeviceCredentials credentials) async {
+        
+    final configResult = await repository.getRunningConfig(credentials);
 
-    // Link route-maps to the interfaces they are applied to
-    final completeRouteMaps = parsedRouteMaps.map((rm) {
-      String? appliedInterface;
-      interfacePolicies.forEach((interface, routeMapName) {
-        if (routeMapName == rm.name) {
-          appliedInterface = interface;
+    return configResult.fold(
+      (failure) => Left(failure),
+      (config) {
+        try {
+          final parsedRouteMaps = PbrParser.parseRouteMaps(config);
+          final parsedAcls = PbrParser.parseAccessLists(config);
+          final interfacePolicies = PbrParser.parseInterfacePolicies(config);
+
+          final completeRouteMaps = parsedRouteMaps.map((rm) {
+            String? appliedInterface;
+            interfacePolicies.forEach((interface, routeMapName) {
+              if (routeMapName == rm.name) {
+                appliedInterface = interface;
+              }
+            });
+            return rm.copyWith(appliedToInterface: appliedInterface);
+          }).toList();
+          
+          return Right(PbrConfiguration(
+            routeMaps: completeRouteMaps,
+            accessLists: parsedAcls,
+          ));
+        } catch (e) {
+          return Left(ServerFailure("Failed to parse router configuration: ${e.toString()}"));
         }
-      });
-      return rm.copyWith(appliedToInterface: appliedInterface);
-    }).toList();
-
-    return PbrConfiguration(
-      routeMaps: completeRouteMaps,
-      accessLists: parsedAcls,
+      },
     );
   }
 }
