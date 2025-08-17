@@ -1,6 +1,7 @@
 // lib/data/datasources/pbr_parser.dart
-import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/route_map.dart';
+
+import '../../domain/entities/access_control_list.dart';
 
 class PbrParser {
   static List<RouteMap> parseRouteMaps(String config) {
@@ -57,48 +58,47 @@ class PbrParser {
     return routeMaps;
   }
   
+  // **این متد به طور کامل بازنویسی شده تا ساده‌تر و دقیق‌تر باشد**
   static List<AccessControlList> parseAccessLists(String config) {
     final accessLists = <AccessControlList>[];
-    // Regex for Extended ACLs (protocol, src, dst, port)
+    // Regex برای ACL های Extended: شماره، permit/deny، پروتکل، مبدا، مقصد، و پورت (اختیاری)
     final extendedAclRegex = RegExp(r'^access-list\s+(\S+)\s+(permit|deny)\s+(\S+)\s+(host\s+\S+|\S+\s+\S+|any)\s+(host\s+\S+|\S+\s+\S+|any)(.*)');
     
-    // Regex for Standard ACLs updated to only match numbers 1-99.
+    // Regex برای ACL های استاندارد: شماره (1-99)، permit/deny، و مبدا
     final standardAclRegex = RegExp(r'^access-list\s+([1-9]\d?)\s+(permit|deny)\s+(host\s+\S+|\S+\s+\S+|any)');
 
     final Map<String, List<AclEntry>> allEntries = {};
     for (final line in config.split('\n')) {
       final trimmedLine = line.trim();
+      
+      // ابتدا تلاش برای تطبیق با الگوی Extended
       final extendedMatch = extendedAclRegex.firstMatch(trimmedLine);
-      final standardMatch = standardAclRegex.firstMatch(trimmedLine);
-
       if (extendedMatch != null) {
         final id = extendedMatch.group(1)!;
-        // This is a simple fix to avoid standard ACLs being parsed as extended.
-        if (int.tryParse(id) != null && int.parse(id) < 100 && extendedMatch.group(3) == 'host') {
-            // Likely a mis-parsed standard ACL, let standard parser handle it.
-        } else {
-            final portCondition = extendedMatch.group(6)?.trim();
-            final entry = AclEntry(
-              sequence: allEntries[id]?.length ?? 0,
-              permission: extendedMatch.group(2)!,
-              protocol: extendedMatch.group(3)!,
-              source: extendedMatch.group(4)!,
-              destination: extendedMatch.group(5)!,
-              portCondition: portCondition?.isNotEmpty == true ? portCondition : null,
-            );
-            allEntries.putIfAbsent(id, () => []).add(entry);
-            continue; // Ensure it's not parsed again
-        }
+        final portCondition = extendedMatch.group(6)?.trim();
+
+        final entry = AclEntry(
+          sequence: allEntries[id]?.length ?? 0,
+          permission: extendedMatch.group(2)!,
+          protocol: extendedMatch.group(3)!,
+          source: extendedMatch.group(4)!,
+          destination: extendedMatch.group(5)!,
+          portCondition: portCondition?.isNotEmpty == true ? portCondition : null,
+        );
+        allEntries.putIfAbsent(id, () => []).add(entry);
+        continue; // اگر Extended بود، به خط بعدی برو
       } 
       
+      // اگر Extended نبود، تلاش برای تطبیق با الگوی Standard
+      final standardMatch = standardAclRegex.firstMatch(trimmedLine);
       if (standardMatch != null) {
         final id = standardMatch.group(1)!;
         final entry = AclEntry(
           sequence: allEntries[id]?.length ?? 0,
           permission: standardMatch.group(2)!,
-          protocol: 'ip', // Standard ACLs match all IP protocols
+          protocol: 'ip', // پروتکل در ACL استاندارد همیشه ip است
           source: standardMatch.group(3)!,
-          destination: 'any', // Destination is implicitly 'any'
+          destination: 'any', // مقصد در ACL استاندارد همیشه any است
         );
         allEntries.putIfAbsent(id, () => []).add(entry);
       }

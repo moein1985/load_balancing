@@ -3,7 +3,6 @@ import 'package:equatable/equatable.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
-
 import '../../../domain/entities/route_map.dart';
 
 abstract class LoadBalancingEvent extends Equatable {
@@ -32,7 +31,6 @@ class FetchInterfacesRequested extends LoadBalancingEvent {}
 
 class FetchRoutingTableRequested extends LoadBalancingEvent {}
 
-/// **رویداد جدید برای درخواست اطلاعات PBR**
 class FetchPbrConfigurationRequested extends LoadBalancingEvent {}
 
 class PingGatewayRequested extends LoadBalancingEvent {
@@ -50,18 +48,10 @@ class ClearPingResult extends LoadBalancingEvent {
 }
 
 class ApplyEcmpConfig extends LoadBalancingEvent {
-  final List<String> finalGateways; 
+  final List<String> finalGateways;
   const ApplyEcmpConfig({required this.finalGateways});
   @override
   List<Object> get props => [finalGateways];
-}
-
-class ApplyPbrConfig extends LoadBalancingEvent {
-  final String sourceNetwork;
-  final String gateway;
-  const ApplyPbrConfig({required this.sourceNetwork, required this.gateway});
-  @override
-  List<Object> get props => [sourceNetwork, gateway];
 }
 
 class DeletePbrRuleRequested extends LoadBalancingEvent {
@@ -71,10 +61,14 @@ class DeletePbrRuleRequested extends LoadBalancingEvent {
   List<Object> get props => [ruleToDelete];
 }
 
-// Event for optimistic UI update after a rule is created/edited.
+// رویداد برای آپدیت خوشبینانه UI پس از ساخت/ویرایش یک رول.
 class PbrRuleUpserted extends LoadBalancingEvent {
-  final RouteMap rule;
-  const PbrRuleUpserted(this.rule);
+  final RouteMap newRule;
+  // نام اصلی رول برای مدیریت تغییر نام در هنگام ویرایش اضافه شده است.
+  final String? oldRuleName;
+
+  const PbrRuleUpserted({required this.newRule, this.oldRuleName});
+
   @override
-  List<Object> get props => [rule];
+  List<Object?> get props => [newRule, oldRuleName];
 }

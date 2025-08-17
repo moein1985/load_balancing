@@ -3,17 +3,21 @@ import 'package:equatable/equatable.dart';
 import 'package:load_balance/domain/entities/access_control_list.dart';
 import 'package:load_balance/domain/entities/route_map.dart';
 import 'package:load_balance/domain/entities/router_interface.dart';
-import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart' show DataStatus;
+import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart'
+    show DataStatus;
 
 enum PbrActionType { nextHop, interface }
+
 enum AclSelectionMode { createNew, selectExisting }
 
 class PbrRuleFormState extends Equatable {
+  final bool isEditing;
+  final RouteMap? initialRule;
   // وضعیت کلی فرم
   final DataStatus formStatus;
   final String? errorMessage;
   final String? successMessage;
-  
+
   // Holds the successfully submitted rule to be passed back.
   final RouteMap? submittedRule;
 
@@ -41,6 +45,8 @@ class PbrRuleFormState extends Equatable {
   final String applyToInterface;
 
   const PbrRuleFormState({
+    this.isEditing = false,
+    this.initialRule,
     this.formStatus = DataStatus.initial,
     this.errorMessage,
     this.successMessage,
@@ -54,7 +60,13 @@ class PbrRuleFormState extends Equatable {
     this.newAclIdError,
     this.newAclEntries = const [
       // همیشه با یک entry خالی شروع می‌کنیم
-      AclEntry(sequence: 1, permission: 'permit', protocol: 'ip', source: 'any', destination: 'any')
+      AclEntry(
+        sequence: 1,
+        permission: 'permit',
+        protocol: 'ip',
+        source: 'any',
+        destination: 'any',
+      ),
     ],
     this.ruleName = '',
     this.ruleNameError,
@@ -64,27 +76,32 @@ class PbrRuleFormState extends Equatable {
     this.egressInterface = '',
     this.applyToInterface = '',
   });
+
   /// A getter to determine if the form is valid and can be submitted.
   bool get isFormValid {
     if (ruleName.trim().isEmpty) return false;
-    if(ruleNameError != null) return false;
+    if (ruleNameError != null) return false;
     if (aclMode == AclSelectionMode.createNew) {
       if (newAclId.trim().isEmpty || newAclIdError != null) return false;
       if (newAclEntries.isEmpty) return false;
-    } else { // selectExisting
+    } else {
+      // selectExisting
       if (selectedAclId == null) return false;
     }
-    
+
     if (actionType == PbrActionType.nextHop) {
       if (nextHop.trim().isEmpty || nextHopError != null) return false;
-    } else { // interface
+    } else {
+      // interface
       if (egressInterface.isEmpty) return false;
     }
-    
+
     return applyToInterface.isNotEmpty;
   }
 
   PbrRuleFormState copyWith({
+    bool? isEditing,
+    RouteMap? initialRule,
     DataStatus? formStatus,
     String? errorMessage,
     String? successMessage,
@@ -107,6 +124,8 @@ class PbrRuleFormState extends Equatable {
     String? applyToInterface,
   }) {
     return PbrRuleFormState(
+      isEditing: isEditing ?? this.isEditing,
+      initialRule: initialRule ?? this.initialRule,
       formStatus: formStatus ?? this.formStatus,
       errorMessage: errorMessage,
       successMessage: successMessage,
@@ -115,7 +134,9 @@ class PbrRuleFormState extends Equatable {
       existingAcls: existingAcls ?? this.existingAcls,
       existingRouteMaps: existingRouteMaps ?? this.existingRouteMaps,
       aclMode: aclMode ?? this.aclMode,
-      selectedAclId: clearSelectedAclId ? null : selectedAclId ?? this.selectedAclId,
+      selectedAclId: clearSelectedAclId
+          ? null
+          : selectedAclId ?? this.selectedAclId,
       newAclId: newAclId ?? this.newAclId,
       newAclIdError: newAclIdError,
       newAclEntries: newAclEntries ?? this.newAclEntries,
@@ -131,8 +152,26 @@ class PbrRuleFormState extends Equatable {
 
   @override
   List<Object?> get props => [
-        formStatus, errorMessage, successMessage, submittedRule, availableInterfaces, existingAcls, existingRouteMaps,
-        aclMode, selectedAclId, newAclId, newAclIdError, newAclEntries, ruleName, ruleNameError,
-        actionType, nextHop, nextHopError, egressInterface, applyToInterface
-      ];
+    formStatus,
+    errorMessage,
+    successMessage,
+    submittedRule,
+    availableInterfaces,
+    existingAcls,
+    existingRouteMaps,
+    aclMode,
+    selectedAclId,
+    newAclId,
+    newAclIdError,
+    newAclEntries,
+    ruleName,
+    ruleNameError,
+    actionType,
+    nextHop,
+    nextHopError,
+    egressInterface,
+    applyToInterface,
+    isEditing,
+    initialRule,
+  ];
 }

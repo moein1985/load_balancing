@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:load_balance/domain/entities/lb_device_credentials.dart';
 import 'package:load_balance/domain/repositories/router_repository.dart';
 import 'package:load_balance/domain/usecases/apply_pbr_rule.dart';
+import 'package:load_balance/domain/usecases/edit_pbr_rule.dart'; // import کردن use case جدید
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_bloc.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_bloc.dart';
 import 'package:load_balance/presentation/bloc/pbr_rule_form/pbr_rule_form_event.dart';
@@ -25,11 +26,18 @@ class AddEditPbrRuleScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final loadBalancingState = context.read<LoadBalancingBloc>().state;
     final isEditing = ruleId != null;
+
+    // **تغییر ۱: Use cases را اینجا می‌سازیم**
+    final repository = context.read<RouterRepository>();
+    final applyPbrRule = ApplyPbrRule(repository);
+    final editPbrRule = EditPbrRule(repository);
+
     return BlocProvider(
       create: (context) {
-        final repository = context.read<RouterRepository>();
+        // **تغییر ۲: هر دو use case را به BLoC پاس می‌دهیم**
         return PbrRuleFormBloc(
-          applyPbrRule: ApplyPbrRule(repository),
+          applyPbrRule: applyPbrRule,
+          editPbrRule: editPbrRule,
           credentials: credentials!,
         )..add(FormLoaded(
             interfaces: loadBalancingState.interfaces,
@@ -48,7 +56,6 @@ class AddEditPbrRuleScreen extends StatelessWidget {
                 content: Text(state.successMessage!),
                 backgroundColor: Colors.green,
               ));
-            // رول موفقیت‌آمیز را به صفحه قبل بازگردان
             Navigator.of(context).pop(state.submittedRule);
           } else if (state.formStatus == DataStatus.failure && state.errorMessage != null) {
             ScaffoldMessenger.of(context)
@@ -91,7 +98,8 @@ class AddEditPbrRuleScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _RuleNameCard(isEditing: isEditing),
+                  // **تغییر ۳: دیگر isEditing را پاس نمی‌دهیم چون همیشه قابل ویرایش است**
+                  const _RuleNameCard(),
                   const SizedBox(height: 16),
                   const PbrAclSection(),
                   const SizedBox(height: 16),
@@ -108,10 +116,8 @@ class AddEditPbrRuleScreen extends StatelessWidget {
   }
 }
 
-// این ویجت برای مدیریت کنترلر به StatefulWidget تبدیل شده است
 class _RuleNameCard extends StatefulWidget {
-  final bool isEditing;
-  const _RuleNameCard({this.isEditing = false});
+  const _RuleNameCard();
 
   @override
   State<_RuleNameCard> createState() => _RuleNameCardState();
@@ -147,19 +153,19 @@ class _RuleNameCardState extends State<_RuleNameCard> {
             }
           },
           child: BlocBuilder<PbrRuleFormBloc, PbrRuleFormState>(
-            buildWhen: (p, c) => p.ruleNameError != c.ruleNameError,
+            buildWhen: (p, c) => p.ruleNameError != c.ruleNameError || p.isEditing != c.isEditing,
             builder: (context, state) {
               return TextFormField(
                 controller: _controller,
-                readOnly: widget.isEditing,
+                // **تغییر ۴: فیلد نام رول همیشه قابل ویرایش است**
+                // readOnly: isEditing,
                 decoration: InputDecoration(
                   labelText: 'Rule Name (Route-Map Name)',
                   hintText: 'e.g., FROM_LAN_TO_ISP2',
-                  errorText: widget.isEditing ? null : state.ruleNameError,
+                  // خطا برای نام تکراری فقط در حالت ساخت جدید نمایش داده می‌شود
+                  errorText: state.isEditing ? null : state.ruleNameError,
                 ),
-                onChanged: widget.isEditing
-                    ? null
-                    : (value) => context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
+                onChanged: (value) => context.read<PbrRuleFormBloc>().add(RuleNameChanged(value)),
               );
             },
           ),

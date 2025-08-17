@@ -12,8 +12,10 @@ class PbrForm extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return BlocBuilder<LoadBalancingBloc, LoadBalancingState>(
-      // فقط زمانی بیلد کن که اطلاعات PBR تغییر کند
-      buildWhen: (prev, curr) => prev.pbrStatus != curr.pbrStatus,
+      // **تغییر اصلی و مهم در این خط است**
+      // ویجت اکنون هم به تغییر وضعیت و هم به تغییر لیست رول‌ها واکنش نشان می‌دهد.
+      buildWhen: (prev, curr) =>
+          prev.pbrStatus != curr.pbrStatus || prev.pbrRouteMaps != curr.pbrRouteMaps,
       builder: (context, state) {
         switch (state.pbrStatus) {
           case DataStatus.initial:
@@ -39,7 +41,7 @@ class PbrForm extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.error_outline, color: Colors.red, size: 48),
+                    const Icon(Icons.error_outline, color: Colors.red, size: 48),
                     const SizedBox(height: 16),
                     Text(
                       'Failed to load PBR rules',
@@ -60,7 +62,7 @@ class PbrForm extends StatelessWidget {
                 ),
               ),
             );
-            
+
           case DataStatus.success:
             if (state.pbrRouteMaps.isEmpty) {
               return Center(

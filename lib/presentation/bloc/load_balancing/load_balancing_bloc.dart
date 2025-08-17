@@ -13,7 +13,8 @@ import '../../../domain/usecases/delete_pbr_rule.dart';
 import 'load_balancing_event.dart' as events;
 import 'load_balancing_state.dart';
 
-class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingState> {
+class LoadBalancingBloc
+    extends Bloc<events.LoadBalancingEvent, LoadBalancingState> {
   final GetRouterInterfaces getInterfaces;
   final GetRouterRoutingTable getRoutingTable;
   final PingGateway pingGateway;
@@ -22,7 +23,7 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
   final DeletePbrRule deletePbrRule;
   final Map<String, Timer> _pingTimers = {};
 
-  LoadBalancingBloc( {
+  LoadBalancingBloc({
     required this.getInterfaces,
     required this.getRoutingTable,
     required this.pingGateway,
@@ -56,32 +57,30 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       debugPrint('[LoadBalancingBloc] $message');
     }
   }
-  
-  // متد جدید برای آپدیت خوشبینانه لیست رول‌ها
+
   void _onPbrRuleUpserted(
     events.PbrRuleUpserted event,
     Emitter<LoadBalancingState> emit,
   ) {
-    final newRule = event.rule;
+    final newRule = event.newRule;
     final currentRules = List<RouteMap>.from(state.pbrRouteMaps);
 
-    final index = currentRules.indexWhere((rule) => rule.name == newRule.name);
+    final nameToFind = event.oldRuleName ?? newRule.name;
+    final index = currentRules.indexWhere((rule) => rule.name == nameToFind);
 
     if (index != -1) {
-      // ویرایش: رول قبلی را با رول جدید جایگزین کن
       currentRules[index] = newRule;
-      _logDebug('Optimistically updated rule: ${newRule.name}');
+      _logDebug(
+        'Optimistically updated rule: ${event.oldRuleName} -> ${newRule.name}',
+      );
     } else {
-      // افزودن: رول جدید را به لیست اضافه کن
       currentRules.add(newRule);
       _logDebug('Optimistically added rule: ${newRule.name}');
     }
-    
-    // لیست را بر اساس نام مرتب کن
+
     currentRules.sort((a, b) => a.name.compareTo(b.name));
     emit(state.copyWith(pbrRouteMaps: currentRules));
   }
-
 
   Future<void> _onFetchPbrConfiguration(
     events.FetchPbrConfigurationRequested event,
@@ -92,27 +91,30 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     emit(state.copyWith(pbrStatus: DataStatus.loading));
     try {
       final pbrConfig = await getPbrConfiguration(state.credentials!);
-      _logDebug('PBR config received: ${pbrConfig.routeMaps.length} route-maps found.');
-      emit(state.copyWith(
-        pbrStatus: DataStatus.success,
-        pbrRouteMaps: pbrConfig.routeMaps,
-        pbrAccessLists: pbrConfig.accessLists,
-      ));
+      _logDebug(
+        'PBR config received: ${pbrConfig.routeMaps.length} route-maps found.',
+      );
+      emit(
+        state.copyWith(
+          pbrStatus: DataStatus.success,
+          pbrRouteMaps: pbrConfig.routeMaps,
+          pbrAccessLists: pbrConfig.accessLists,
+        ),
+      );
     } on ServerFailure catch (e) {
       _logDebug('Error fetching PBR config: ${e.message}');
-      emit(state.copyWith(
-        pbrStatus: DataStatus.failure,
-        pbrError: e.message,
-      ));
+      emit(state.copyWith(pbrStatus: DataStatus.failure, pbrError: e.message));
     } catch (e) {
       _logDebug('Unknown error fetching PBR config: $e');
-      emit(state.copyWith(
-        pbrStatus: DataStatus.failure,
-        pbrError: 'An unknown error occurred while fetching PBR rules.',
-      ));
+      emit(
+        state.copyWith(
+          pbrStatus: DataStatus.failure,
+          pbrError: 'An unknown error occurred while fetching PBR rules.',
+        ),
+      );
     }
   }
-  
+
   void _onLoadBalancingTypeSelected(
     events.LoadBalancingTypeSelected event,
     Emitter<LoadBalancingState> emit,
@@ -120,16 +122,16 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     _logDebug('Load Balancing type selected: ${event.type}');
     emit(state.copyWith(type: event.type));
 
-    if (event.type == LoadBalancingType.pbr && state.pbrStatus == DataStatus.initial) {
+    if (event.type == LoadBalancingType.pbr &&
+        state.pbrStatus == DataStatus.initial) {
       add(events.FetchPbrConfigurationRequested());
-    }
-    else if (event.type == LoadBalancingType.ecmp) {
+    } else if (event.type == LoadBalancingType.ecmp) {
       add(events.FetchRoutingTableRequested());
     }
   }
 
   List<String> _parseEcmpGateways(String routingTable) {
-    final gateways = <String>{}; 
+    final gateways = <String>{};
     final ecmpRegex = RegExp(r'0\.0\.0\.0/0\s.*via\s+([\d\.]+)');
     final subsequentLineRegex = RegExp(r'^\s*\[\d+/\d+\]\s+via\s+([\d\.]+)');
     final lines = routingTable.split('\n');
@@ -156,13 +158,18 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     return gateways.toList();
   }
 
-  void _onScreenStarted(events.ScreenStarted event, Emitter<LoadBalancingState> emit) {
+  void _onScreenStarted(
+    events.ScreenStarted event,
+    Emitter<LoadBalancingState> emit,
+  ) {
     _logDebug('Screen started - IP: ${event.credentials.ip}');
-    emit(state.copyWith(
-      credentials: event.credentials,
-      interfaces: event.interfaces, 
-      interfacesStatus: DataStatus.success, 
-    ));
+    emit(
+      state.copyWith(
+        credentials: event.credentials,
+        interfaces: event.interfaces,
+        interfacesStatus: DataStatus.success,
+      ),
+    );
     add(events.FetchRoutingTableRequested());
   }
 
@@ -188,22 +195,25 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     try {
       final interfaces = await getInterfaces(state.credentials!);
       _logDebug('${interfaces.length} interfaces received');
-      emit(state.copyWith(
-        interfaces: interfaces,
-        interfacesStatus: DataStatus.success,
-      ));
+      emit(
+        state.copyWith(
+          interfaces: interfaces,
+          interfacesStatus: DataStatus.success,
+        ),
+      );
     } on ServerFailure catch (e) {
       _logDebug('Error fetching interfaces: ${e.message}');
-      emit(state.copyWith(
-        interfacesStatus: DataStatus.failure,
-        error: e.message,
-      ));
+      emit(
+        state.copyWith(interfacesStatus: DataStatus.failure, error: e.message),
+      );
     } catch (e) {
       _logDebug('Unknown error fetching interfaces: $e');
-      emit(state.copyWith(
-        interfacesStatus: DataStatus.failure,
-        error: 'An unknown error occurred while fetching interfaces.',
-      ));
+      emit(
+        state.copyWith(
+          interfacesStatus: DataStatus.failure,
+          error: 'An unknown error occurred while fetching interfaces.',
+        ),
+      );
     }
   }
 
@@ -216,32 +226,43 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       return;
     }
     _logDebug('Starting to fetch routing table');
-    emit(state.copyWith(
-      routingTableStatus: DataStatus.loading,
-      clearRoutingTable: true,
-    ));
+    emit(
+      state.copyWith(
+        routingTableStatus: DataStatus.loading,
+        clearRoutingTable: true,
+      ),
+    );
     try {
       final table = await getRoutingTable(state.credentials!);
       final gateways = _parseEcmpGateways(table);
-      _logDebug('Routing table received, ${gateways.length} ECMP gateways found.');
-      
-      emit(state.copyWith(
-        routingTable: table,
-        routingTableStatus: DataStatus.success,
-        initialEcmpGateways: gateways,
-      ));
+      _logDebug(
+        'Routing table received, ${gateways.length} ECMP gateways found.',
+      );
+
+      emit(
+        state.copyWith(
+          routingTable: table,
+          routingTableStatus: DataStatus.success,
+          initialEcmpGateways: gateways,
+        ),
+      );
     } on ServerFailure catch (e) {
       _logDebug('Error fetching routing table: ${e.message}');
-      emit(state.copyWith(
-        routingTable: 'Error: ${e.message}',
-        routingTableStatus: DataStatus.failure,
-      ));
+      emit(
+        state.copyWith(
+          routingTable: 'Error: ${e.message}',
+          routingTableStatus: DataStatus.failure,
+        ),
+      );
     } catch (e) {
       _logDebug('Unknown error fetching routing table: $e');
-      emit(state.copyWith(
-        routingTable: 'An unknown error occurred while fetching routing table.',
-        routingTableStatus: DataStatus.failure,
-      ));
+      emit(
+        state.copyWith(
+          routingTable:
+              'An unknown error occurred while fetching routing table.',
+          routingTableStatus: DataStatus.failure,
+        ),
+      );
     }
   }
 
@@ -267,43 +288,43 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     }
     _pingTimers[ipAddress]?.cancel();
     _logDebug('Starting ping for IP: $ipAddress');
-    emit(state.copyWith(
-      pingStatus: DataStatus.loading,
-      pingingIp: ipAddress,
-    ));
+    emit(state.copyWith(pingStatus: DataStatus.loading, pingingIp: ipAddress));
     try {
       final result = await pingGateway(
         credentials: state.credentials!,
         ipAddress: ipAddress,
       );
       _logDebug('Ping result for $ipAddress: $result');
-      
+
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
-      
+
       final newPingResults = Map<String, String>.from(state.pingResults);
       newPingResults[ipAddress] = result;
-      emit(state.copyWith(
-        pingResults: newPingResults,
-        pingStatus: DataStatus.success,
-        pingingIp: '',
-      ));
+      emit(
+        state.copyWith(
+          pingResults: newPingResults,
+          pingStatus: DataStatus.success,
+          pingingIp: '',
+        ),
+      );
     } catch (e) {
       _logDebug('Error during ping for $ipAddress: $e');
       _pingTimers[ipAddress]?.cancel();
       _pingTimers.remove(ipAddress);
       final newPingResults = Map<String, String>.from(state.pingResults);
       newPingResults[ipAddress] = 'Ping Error: ${e.toString()}';
-      emit(state.copyWith(
-        pingResults: newPingResults,
-        pingStatus: DataStatus.failure,
-        pingingIp: '',
-      ));
+      emit(
+        state.copyWith(
+          pingResults: newPingResults,
+          pingStatus: DataStatus.failure,
+          pingingIp: '',
+        ),
+      );
     }
   }
 
   Future<void> _onApplyEcmpConfig(
-
     events.ApplyEcmpConfig event,
     Emitter<LoadBalancingState> emit,
   ) async {
@@ -316,8 +337,12 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
     final finalGateways = event.finalGateways;
     _logDebug('Initial Gateways: $initialGateways');
     _logDebug('Final Gateways: $finalGateways');
-    final gatewaysToAdd = finalGateways.where((g) => !initialGateways.contains(g)).toList();
-    final gatewaysToRemove = initialGateways.where((g) => !finalGateways.contains(g)).toList();
+    final gatewaysToAdd = finalGateways
+        .where((g) => !initialGateways.contains(g))
+        .toList();
+    final gatewaysToRemove = initialGateways
+        .where((g) => !finalGateways.contains(g))
+        .toList();
     _logDebug('Gateways to Add: $gatewaysToAdd');
     _logDebug('Gateways to Remove: $gatewaysToRemove');
 
@@ -326,32 +351,31 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
       final result = await applyEcmpConfig(
         credentials: state.credentials!,
         gatewaysToAdd: gatewaysToAdd,
-      gatewaysToRemove: gatewaysToRemove,
+        gatewaysToRemove: gatewaysToRemove,
       );
       _logDebug('ECMP config apply result: $result');
-      
-      if (result.toLowerCase().contains('fail') || result.toLowerCase().contains('error')) {
-         emit(state.copyWith(
-            status: DataStatus.failure,
-            error: result,
-          ));
+
+      if (result.toLowerCase().contains('fail') ||
+          result.toLowerCase().contains('error')) {
+        emit(state.copyWith(status: DataStatus.failure, error: result));
       } else {
-         emit(state.copyWith(
-            status: DataStatus.success,
-            successMessage: result,
-          ));
-         add(events.FetchRoutingTableRequested());
+        emit(
+          state.copyWith(status: DataStatus.success, successMessage: result),
+        );
+        add(events.FetchRoutingTableRequested());
       }
     } catch (e) {
       _logDebug('Error applying ECMP config: $e');
-      emit(state.copyWith(
-        status: DataStatus.failure,
-        error: 'Failed to apply config: ${e.toString()}',
-      ));
+      emit(
+        state.copyWith(
+          status: DataStatus.failure,
+          error: 'Failed to apply config: ${e.toString()}',
+        ),
+      );
     }
   }
 
-    Future<void> _onDeletePbrRule(
+  Future<void> _onDeletePbrRule(
     events.DeletePbrRuleRequested event,
     Emitter<LoadBalancingState> emit,
   ) async {
@@ -362,17 +386,18 @@ class LoadBalancingBloc extends Bloc<events.LoadBalancingEvent, LoadBalancingSta
         credentials: state.credentials!,
         ruleToDelete: event.ruleToDelete,
       );
-      
+
       final updatedRouteMaps = List.of(state.pbrRouteMaps)
         ..removeWhere((rule) => rule.name == event.ruleToDelete.name);
       _logDebug('Optimistically removed rule: ${event.ruleToDelete.name}');
-        
-      emit(state.copyWith(
-        status: DataStatus.success, 
-        successMessage: result,
-        pbrRouteMaps: updatedRouteMaps,
-      ));
 
+      emit(
+        state.copyWith(
+          status: DataStatus.success,
+          successMessage: result,
+          pbrRouteMaps: updatedRouteMaps,
+        ),
+      );
     } catch (e) {
       emit(state.copyWith(status: DataStatus.failure, error: e.toString()));
     }

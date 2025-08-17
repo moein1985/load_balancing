@@ -9,7 +9,7 @@ import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_eve
 import 'package:load_balance/presentation/bloc/load_balancing/load_balancing_state.dart';
 import 'package:load_balance/presentation/screens/load_balancing/widgets/ecmp_form.dart';
 import 'package:load_balance/presentation/screens/load_balancing/widgets/pbr_form.dart';
-import 'package:load_balance/domain/entities/route_map.dart'; // این import را اضافه کنید
+import 'package:load_balance/domain/entities/route_map.dart';
 
 class LoadBalancingScreen extends StatefulWidget {
   final LBDeviceCredentials credentials;
@@ -27,10 +27,9 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   @override
   void initState() {
     super.initState();
-    context.read<LoadBalancingBloc>().add(ScreenStarted(
-          widget.credentials,
-          widget.initialInterfaces,
-        ));
+    context.read<LoadBalancingBloc>().add(
+      ScreenStarted(widget.credentials, widget.initialInterfaces),
+    );
   }
 
   @override
@@ -42,17 +41,23 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
         builder: (context, state) {
           if (state.type == LoadBalancingType.pbr) {
             return FloatingActionButton.extended(
-              onPressed: () async { // متد را async کنید
-                final credentials = context.read<LoadBalancingBloc>().state.credentials;
+              onPressed: () async {
+                final credentials = context
+                    .read<LoadBalancingBloc>()
+                    .state
+                    .credentials;
                 if (credentials != null) {
-                  // منتظر نتیجه بازگشتی از صفحه ساخت رول باشید
                   final result = await context.pushNamed<RouteMap?>(
-                    'add_pbr_rule', 
-                    extra: credentials
+                    'add_pbr_rule',
+                    extra: credentials,
                   );
-                  // اگر رولی بازگردانده شد، رویداد آپدیت را ارسال کنید
                   if (result != null && context.mounted) {
-                    context.read<LoadBalancingBloc>().add(PbrRuleUpserted(result));
+                    // رویداد را به درستی برای یک رول جدید ایجاد می‌کنیم
+                    context.read<LoadBalancingBloc>().add(
+                      PbrRuleUpserted(
+                        newRule: result,
+                      ), // در اینجا به oldRuleName نیازی نیست
+                    );
                   }
                 }
               },
@@ -66,7 +71,8 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
       body: BlocListener<LoadBalancingBloc, LoadBalancingState>(
         listenWhen: (previous, current) => previous.status != current.status,
         listener: (context, state) {
-          if (state.status == DataStatus.success && state.successMessage != null) {
+          if (state.status == DataStatus.success &&
+              state.successMessage != null) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -75,7 +81,8 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                   backgroundColor: Colors.green,
                 ),
               );
-          } else if (state.status == DataStatus.failure && state.error.isNotEmpty) {
+          } else if (state.status == DataStatus.failure &&
+              state.error.isNotEmpty) {
             ScaffoldMessenger.of(context)
               ..hideCurrentSnackBar()
               ..showSnackBar(
@@ -106,7 +113,7 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                         label: Text('ECMP'),
                         icon: Icon(Icons.alt_route),
                       ),
-                       ButtonSegment<LoadBalancingType>(
+                      ButtonSegment<LoadBalancingType>(
                         value: LoadBalancingType.pbr,
                         label: Text('PBR'),
                         icon: Icon(Icons.rule),
@@ -115,8 +122,8 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
                     selected: {state.type},
                     onSelectionChanged: (Set<LoadBalancingType> newSelection) {
                       context.read<LoadBalancingBloc>().add(
-                            LoadBalancingTypeSelected(newSelection.first),
-                          );
+                        LoadBalancingTypeSelected(newSelection.first),
+                      );
                     },
                   );
                 },
@@ -141,7 +148,6 @@ class _LoadBalancingScreenState extends State<LoadBalancingScreen> {
   }
 }
 
-// ویجت _RouterInfoSection بدون تغییر باقی می‌ماند
 class _RouterInfoSection extends StatelessWidget {
   const _RouterInfoSection();
   @override
@@ -186,7 +192,7 @@ class _RouterInfoSection extends StatelessWidget {
                 style: const TextStyle(color: Colors.red),
               ),
             )
-           else if (state.interfaces.isEmpty)
+          else if (state.interfaces.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16.0),
               child: Text('No active interfaces found or connection failed.'),
@@ -251,8 +257,8 @@ class _RouterInfoSection extends StatelessWidget {
                       ? null
                       : () {
                           context.read<LoadBalancingBloc>().add(
-                                FetchRoutingTableRequested(),
-                              );
+                            FetchRoutingTableRequested(),
+                          );
                         },
                 )
               else
